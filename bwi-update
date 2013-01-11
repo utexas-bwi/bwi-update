@@ -1,4 +1,94 @@
 #!/usr/bin/python
 
-from subprocess import call
-call(["echo","hello"])
+import subprocess
+import os
+
+DEFAULT_UBUNTU_DISTRO = "precise"
+DEFAULT_ROS_DISTRO = "groovy"
+DEFAULT_CONFIG_DIR = os.path.expanduser("~") + ".bwi"
+ROS_SOURCES_LOCATION = "/etc/apt/sources.list.d/ros-latest.list"
+
+def printError(text):
+  print "\033[31m" + text + "\033[0m"
+
+def printSuccess(text):
+  print "\033[33m" + text + "\033[0m"
+
+def printResult(success):
+  if success:
+    printSuccess(" - Done");
+  else:
+    printError(" - Failed");
+
+def testPath(path):
+  return os.path.exists(path)
+
+def call(command, verbose=False, print_on_error=True):
+  p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+  out,_ = p.communicate()
+  if p.returncode != 0 and (verbose or print_on_error):
+    printError(out)
+  elif verbose:
+    printText(out)
+  return p.returncode == 0, out
+
+def installROSRepository(distro=DEFAULT_UBUNTU_DISTRO, remove=False):
+  if not remove:
+    print "Updating sources with location of ROS Repository"
+    if testPath(ROS_SOURCES_LOCATION):
+      print " - Existing sources file for repository found. Overwriting..."
+    tmp_file_name = "/tmp/ros_repo_location"
+    f = open(tmp_file_name,'w')
+    f.write("deb http://packages.ros.org/ros/ubuntu " + distro + " main")
+    f.close()
+    success = call(["cp",tmp_file_name,ROS_SOURCES_LOCATION])
+    call(["rm","-rf",tmp_file_name], print_on_error=False)
+    printResult(success)
+    return success
+  else:
+    print "Removing location of ROS Repository from sources"
+    if not testPath(ROS_SOURCES_LOCATION):
+      print " - Sources file not found..."
+    success = call(["rm","-rf",ROS_SOURCES_LOCATION])
+    printResult(success)
+    return success
+
+def installROSKey():
+  print "Installing ROS key"
+  p1 = subprocess.Popen(["wget","http://packages.ros.org/ros.key","-O","-"],stdout=subprocess.PIPE);
+  returncode = subprocess.call(["apt-key","add","-"],stdin=p1.stdout)
+  printResult(returncode == 0)
+  return returncode == 0
+
+def updateApt():
+  print "Updating apt-get"
+  success = call(["apt-get", "update"])
+  printResult(success)
+  return success
+
+def installAptPackages(package_list, remove=False):
+  print "Installing/Removing packages from apt-get"
+  text = "Installing"
+  command = "install"
+  if remove:
+    text = "Removing"
+    command = "remove"
+  all_packages_successful = True
+  for package_name in package_list:
+    print " - " + text + " " + package_name + "..."
+    success = call(["apt-get", command, "--yes", package_name])
+    print "  ",
+    printResult(success)
+    all_packages_successful = all_packages_successful and success
+  return all_packages_successful
+
+def catkinWorkspaceExists(workspace_location):
+def initializeCatkinWorkspace(workspace_location,remove=False):
+def initializeRosbuildWorkspace
+def initializeRosdep
+def updateRosdep
+def installRosbuildPackage
+def installCatkinPackage
+def installGazeboModels
+def setupBash
+
