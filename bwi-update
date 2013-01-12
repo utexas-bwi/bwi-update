@@ -7,12 +7,22 @@ DEFAULT_UBUNTU_DISTRO = "precise"
 DEFAULT_ROS_DISTRO = "groovy"
 DEFAULT_CONFIG_DIR = os.path.expanduser("~") + ".bwi"
 ROS_SOURCES_LOCATION = "/etc/apt/sources.list.d/ros-latest.list"
+ROSDEP_FILE_LOCATION = "/etc/ros/rosdep/sources.list.d/20-default.list"
+GAZEBO_MODELS_REPO = "https://bitbucket.org/osrf/gazebo_models"
+DEFAULT_BASE_DIR = os.path.expanduser("~") + "/ros"
+DEFAULT_ROSBUILD_WS = DEFAULT_BASE_DIR + "/rosbuild_ws"
+DEFAULT_CATKIN_WS = DEFAULT_BASE_DIR + "/catkin_ws"
+DEFAULT_GAZEBO_DIR = DEFAULT_BASE_DIR + "/gazebo"
+DEFAULT_GAZEBO_MODELS_DIR = DEFAULT_GAZEBO_DIR + "/gazebo_models"
 
 def printError(text):
   print "\033[31m" + text + "\033[0m"
 
 def printSuccess(text):
   print "\033[33m" + text + "\033[0m"
+
+def printBoldText(text):
+  print "\033[1m[" + text + "]\033[0m"
 
 def printResult(success):
   if success:
@@ -29,45 +39,44 @@ def call(command, verbose=False, print_on_error=True):
   if p.returncode != 0 and (verbose or print_on_error):
     printError(out)
   elif verbose:
-    printText(out)
-  return p.returncode == 0, out
+    print out,
+  return p.returncode == 0
 
 def installROSRepository(distro=DEFAULT_UBUNTU_DISTRO, remove=False):
   if not remove:
-    print "Updating sources with location of ROS Repository"
+    printBoldText("Updating sources with location of ROS Repository")
     if testPath(ROS_SOURCES_LOCATION):
-      print " - Existing sources file for repository found. Overwriting..."
-    tmp_file_name = "/tmp/ros_repo_location"
-    f = open(tmp_file_name,'w')
+      print " - Existing sources file for repository found. Overwriting."
+    f = open(ROS_SOURCES_LOCATION,'w')
     f.write("deb http://packages.ros.org/ros/ubuntu " + distro + " main")
     f.close()
-    success = call(["cp",tmp_file_name,ROS_SOURCES_LOCATION])
-    call(["rm","-rf",tmp_file_name], print_on_error=False)
+    success = True
     printResult(success)
     return success
   else:
-    print "Removing location of ROS Repository from sources"
+    printBoldText("Removing location of ROS Repository from sources")
     if not testPath(ROS_SOURCES_LOCATION):
-      print " - Sources file not found..."
+      print " - Sources file not found."
+      return True
     success = call(["rm","-rf",ROS_SOURCES_LOCATION])
     printResult(success)
     return success
 
 def installROSKey():
-  print "Installing ROS key"
-  p1 = subprocess.Popen(["wget","http://packages.ros.org/ros.key","-O","-"],stdout=subprocess.PIPE);
-  returncode = subprocess.call(["apt-key","add","-"],stdin=p1.stdout)
+  printBoldText("Installing ROS key")
+  p1 = subprocess.Popen(["wget","http://packages.ros.org/ros.key","-O","-"],stdout=subprocess.PIPE,stderr=subprocess.PIPE);
+  returncode = subprocess.call(["apt-key","add","-"],stdin=p1.stdout,stdout=subprocess.PIPE)
   printResult(returncode == 0)
   return returncode == 0
 
 def updateApt():
-  print "Updating apt-get"
+  printBoldText("Updating apt-get")
   success = call(["apt-get", "update"])
   printResult(success)
   return success
 
 def installAptPackages(package_list, remove=False):
-  print "Installing/Removing packages from apt-get"
+  printBoldText("Installing/Removing packages from apt-get")
   text = "Installing"
   command = "install"
   if remove:
@@ -82,13 +91,54 @@ def installAptPackages(package_list, remove=False):
     all_packages_successful = all_packages_successful and success
   return all_packages_successful
 
-def catkinWorkspaceExists(workspace_location):
-def initializeCatkinWorkspace(workspace_location,remove=False):
-def initializeRosbuildWorkspace
-def initializeRosdep
-def updateRosdep
-def installRosbuildPackage
-def installCatkinPackage
-def installGazeboModels
-def setupBash
+def initializeRosdep(remove=False):
+  if not remove:
+    printBoldText("Initializing rosdep")
+    if testPath(ROSDEP_FILE_LOCATION):
+      print " - Default rosdep sources file already exists. Reinitializing."
+      call(["rm","-rf",ROSDEP_FILE_LOCATION])
+    success = call(["rosdep","init"])
+    printResult(success)
+    return success
+  else:
+    printBoldText("Removing rosdep sources")
+    if not testPath(ROSDEP_FILE_LOCATION):
+      print " - Default rosdep sources file does not exist."
+      return True
+    else:
+      success = call(["rm","-rf",ROSDEP_FILE_LOCATION])
+      printResult(success)
+      return success
 
+def updateRosdep():
+  printBoldText("Updating rosdep rules")
+  success = call(["rosdep","update"],verbose=True)
+  printResult(success)
+  return success
+
+def installGazeboModels(remove=False):
+  if not remove:
+    printBoldText("Installing gazebo models to local directory")
+    if call(["mkdir","-p", DEFAULT_GAZEBO_DIR]):
+      call(["hg", "clone", GAZEBO_MODELS_REPO, DEFAULT_GAZEBO_MODELS_DIR])
+      #create a gazebo environment setup file
+      file_name = DEFAULT_CONFIG_DIR + "/gazebo.bash"
+      f = open(file_name,'w')
+      f.write("export GAZEBO_MODEL_PATH=~/gazebo/gazebo_models:${GAZEBO_MODEL_PATH}")
+      f.close()
+      # let your bashrc know about the existence of this gazebo setup file
+      f = open(os.path.expanduser("~") + ".bashrc", "a")
+      f.write("source ~/.bwi/gazebo.bash")
+      f.close()
+      success = True
+    else:
+      success = False
+
+  printResult(success)
+
+installROSRepository()
+installROSKey()
+updateApt()
+initializeRosdep()
+updateRosdep()
+#installAptPackages(['subversion','mercurial'])
