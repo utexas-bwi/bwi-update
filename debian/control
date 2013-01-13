@@ -1,15 +1,14 @@
 Source: bwi-update
 Section: python
 Priority: optional
-Maintainer: Piyush Khandelwal, <piyushk@gmail.com>
-Build-Depends: debhelper (>= 7),
-               python (>= 2.6.6-3~)
+Maintainer: Piyush Khandelwal (piyushk) <piyushk@gmail.com>
+Build-Depends: debhelper (>= 7)
 Standards-Version: 3.9.3
 
 Package: bwi-update
 Architecture: all
 Section: python
-Depends: bwi-update, ${python:Depends}
+Depends: bwi-update, python-yaml, ${python:Depends}
 Description: Convenience script for maintaining ROS machines
  Installs ROS binaries through apt-get and manages packages in a local users
  ROS workspace.

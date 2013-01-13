@@ -2,18 +2,45 @@
 
 import subprocess
 import os
+import hashlib
+import yaml
+import sys
+import argparse
+import string
+import random
 
-DEFAULT_UBUNTU_DISTRO = "precise"
-DEFAULT_ROS_DISTRO = "groovy"
-DEFAULT_CONFIG_DIR = os.path.expanduser("~") + ".bwi"
+# Some web constants that are unlikely to change
 ROS_SOURCES_LOCATION = "/etc/apt/sources.list.d/ros-latest.list"
 ROSDEP_FILE_LOCATION = "/etc/ros/rosdep/sources.list.d/20-default.list"
 GAZEBO_MODELS_REPO = "https://bitbucket.org/osrf/gazebo_models"
+GAZEBO_MODELS_DIR_SUFFIX = "/gazebo_models"
+
+# Config locations
+SYSTEM_CONFIG_FILE = "/etc/bwi/bwi-update/config"
+CURRENT_SYSTEM_CONFIG = "/etc/bwi/bwi-update/current"
+USER_CONFIG_DIR = os.path.expanduser("~") + "/.bwi"
+USER_CONFIG_FILE = USER_CONFIG_DIR + "/config"
+CURRENT_USER_CONFIG = USER_CONFIG_DIR + "/current"
+
+# some constants defining workspace type
+CATKIN = "catkin"
+ROSBUILD = "rosbuild"
+
+DEFAULT_UBUNTU_DISTRO = "precise"
+DEFAULT_ROS_DISTRO = "groovy"
+DEFAULT_TARGET = "/opt/ros/" + DEFAULT_ROS_DISTRO
+
 DEFAULT_BASE_DIR = os.path.expanduser("~") + "/ros"
 DEFAULT_ROSBUILD_WS = DEFAULT_BASE_DIR + "/rosbuild_ws"
 DEFAULT_CATKIN_WS = DEFAULT_BASE_DIR + "/catkin_ws"
 DEFAULT_GAZEBO_DIR = DEFAULT_BASE_DIR + "/gazebo"
-DEFAULT_GAZEBO_MODELS_DIR = DEFAULT_GAZEBO_DIR + "/gazebo_models"
+
+# should be converted to class variables when this script is improved
+final_source_list = list()
+print_command = False
+dry_run = False
+
+#helper functions
 
 def printError(text):
   print "\033[31m" + text + "\033[0m"
@@ -30,17 +57,113 @@ def printResult(success):
   else:
     printError(" - Failed");
 
+def isSuperUser():
+
+  return os.getuid() == 0
+
+def md5ForFile(file_name, block_size=2**20):
+  # http://stackoverflow.com/questions/1131220/get-md5-hash-of-a-files-without-open-it-in-python
+  f = open(file_name,"rb")
+  md5 = hashlib.md5()
+  while True:
+    data = f.read(block_size)
+    if not data:
+      break
+    md5.update(data)
+  f.close()
+  return md5.hexdigest()
+
+def userQuery(question, default="no"):
+    """Ask a yes/no question via raw_input() and return their answer.
+
+    "question" is a string that is presented to the user.
+    "default" is the presumed answer if the user just hits <Enter>.
+        It must be "yes" (the default), "no" or None (meaning
+        an answer is required of the user).
+
+    The "answer" return value is one of "yes" or "no".
+
+    from: http://stackoverflow.com/questions/3041986/python-command-line-yes-no-input
+    """
+    valid = {"yes":True,   "y":True,  "ye":True,
+             "no":False,     "n":False}
+    if default == None:
+        prompt = " [y/n] "
+    elif default == "yes":
+        prompt = " [Y/n] "
+    elif default == "no":
+        prompt = " [y/N] "
+    else:
+        raise ValueError("invalid default answer: '%s'" % default)
+
+    while True:
+        sys.stdout.write(question + prompt)
+        choice = raw_input().lower()
+        if default is not None and choice == '':
+            return valid[default]
+        elif choice in valid:
+            return valid[choice]
+        else:
+            sys.stdout.write("Please respond with 'yes' or 'no' "\
+                             "(or 'y' or 'n').\n")
+
 def testPath(path):
   return os.path.exists(path)
 
-def call(command, verbose=False, print_on_error=True):
-  p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
-  out,_ = p.communicate()
-  if p.returncode != 0 and (verbose or print_on_error):
-    printError(out)
-  elif verbose:
-    print out,
-  return p.returncode == 0
+def call(command, verbose=False, verbose_error=True, cwd=None):
+  if print_command or dry_run:
+    print " ".join(command)
+    return True
+  if not dry_run:
+    if verbose:
+      p = subprocess.Popen(command,cwd=cwd)
+      p.wait()
+      return p.returncode == 0
+    elif verbose_error:
+      p = subprocess.Popen(command, stdout=subprocess.PIPE, cwd=cwd)
+      p.wait()
+      return p.returncode == 0
+    else:
+      p = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, cwd=cwd)
+      p.wait()
+      return p.returncode == 0
+
+def callWsCommand(args, type=CATKIN, ws=DEFAULT_CATKIN_WS,verbose=False,verbose_error=True):
+  command = "rosws"
+  command_package = "python-rosinstall"
+  if type == CATKIN:
+    command = "wstool"
+    command_package = "python-wstool"
+    ws = ws + "/src"
+  return call(["/bin/bash","-c","unset ROS_WORKSPACE && " + command + " " + " ".join(args)],cwd=ws,verbose=verbose,verbose_error=verbose_error)
+
+def isWebAddress(file):
+  return file[0:7] == "http://" or file[0:8] == "https://"
+
+def anonymize(file):
+  return file + '_' + ''.join(random.choice(string.ascii_uppercase + string.digits) for x in range(20))
+
+def resolveFromWeb(file):
+  if isWebAddress(file):
+    file_name = file.split('/')[-1]
+    local_file_path = "/tmp/" + anonymize(file_name)
+    success = call(["wget", "--quiet", file, "-O", local_file_path])
+    if not success:
+      return None
+    file = local_file_path
+  return file
+
+def getPackageNamesFromRosinstallDict(rosinstall_dict):
+  local_names = [local_entry[local_entry.keys()[0]]['local-name'] for local_entry in rosinstall_dict]
+  return local_names
+
+def getPackageNamesFromRosinstallFile(rosinstall_file):
+  rosinstall_file = resolveFromWeb(rosinstall_file)
+  f = open(rosinstall_file, "r")
+  rosinstall_dict = yaml.load(f)
+  return getPackageNamesFromRosinstallDict(rosinstall_dict)
+
+# primary functions
 
 def installROSRepository(distro=DEFAULT_UBUNTU_DISTRO, remove=False):
   if not remove:
@@ -64,7 +187,7 @@ def installROSRepository(distro=DEFAULT_UBUNTU_DISTRO, remove=False):
 
 def installROSKey():
   printBoldText("Installing ROS key")
-  p1 = subprocess.Popen(["wget","http://packages.ros.org/ros.key","-O","-"],stdout=subprocess.PIPE,stderr=subprocess.PIPE);
+  p1 = subprocess.Popen(["wget","http://packages.ros.org/ros.key","--quiet","-O","-"],stdout=subprocess.PIPE,stderr=subprocess.PIPE);
   returncode = subprocess.call(["apt-key","add","-"],stdin=p1.stdout,stdout=subprocess.PIPE)
   printResult(returncode == 0)
   return returncode == 0
@@ -116,29 +239,333 @@ def updateRosdep():
   printResult(success)
   return success
 
-def installGazeboModels(remove=False):
+def installGazeboModels(remove=False,gazebo_dir=DEFAULT_GAZEBO_DIR):
+  gazebo_models_dir = gazebo_dir + GAZEBO_MODELS_DIR_SUFFIX
   if not remove:
-    printBoldText("Installing gazebo models to local directory")
-    if call(["mkdir","-p", DEFAULT_GAZEBO_DIR]):
-      call(["hg", "clone", GAZEBO_MODELS_REPO, DEFAULT_GAZEBO_MODELS_DIR])
-      #create a gazebo environment setup file
-      file_name = DEFAULT_CONFIG_DIR + "/gazebo.bash"
-      f = open(file_name,'w')
-      f.write("export GAZEBO_MODEL_PATH=~/gazebo/gazebo_models:${GAZEBO_MODEL_PATH}")
-      f.close()
-      # let your bashrc know about the existence of this gazebo setup file
-      f = open(os.path.expanduser("~") + ".bashrc", "a")
-      f.write("source ~/.bwi/gazebo.bash")
-      f.close()
-      success = True
+    printBoldText("Installing gazebo models in " + gazebo_dir)
+    if call(["mkdir","-p", gazebo_dir]):
+      if testPath(gazebo_models_dir):
+        print " - Directory is not empty. Cannot continue."
+        success = False
+      else:
+        call(["hg", "clone", GAZEBO_MODELS_REPO, gazebo_models_dir],verbose=True)
+        #create a gazebo environment setup file
+        if call(["mkdir", "-p", USER_CONFIG_DIR]): 
+          file_name = USER_CONFIG_DIR + "/gazebo.bash"
+          f = open(file_name,'w')
+          f.write("export GAZEBO_MODEL_PATH=" + gazebo_models_dir + ":${GAZEBO_MODEL_PATH}")
+          f.close()
+          final_source_list.append("source " + file_name)
+          success = True
+        else:
+          print " - Config directory: " + USER_CONFIG_DIR + " does not exist, and unable to create it. Cannot Continue"
+          success = False
     else:
+      print " - " + gazebo_dir + " does not exist, and unable to create it. Cannot Continue"
       success = False
-
+  else:
+    printBoldText("Removing gazebo models directory from: " + gazebo_models_dir)
+    if not testPath(gazebo_models_dir):
+      print " - Directory does not exist."
+      return True
+    else:
+      success = call(["rm","-rf",gazebo_models_dir])
   printResult(success)
+  return success
 
-installROSRepository()
-installROSKey()
-updateApt()
-initializeRosdep()
-updateRosdep()
-#installAptPackages(['subversion','mercurial'])
+def printFinalMessage():
+  print "\nPlease ensure that the following lines have been appended to " + os.path.expanduser("~") + "/.bashrc:\n"
+  for s in final_source_list:
+    print s
+
+def initializeWorkspace(remove=False,type=CATKIN,ws=DEFAULT_CATKIN_WS,target=DEFAULT_TARGET):
+  if not remove:
+    printBoldText("Initializing workspace of type: " + type + " in " + ws)
+    if type not in [CATKIN, ROSBUILD]:
+      print " - Unknown workspace type: " + type + ". Cannot continue."
+      success = False
+    else:
+      if testPath(ws):
+        print " - Workspace directory is not empty. Cannot continue."
+        success = False
+      else:
+        if type == CATKIN:
+          if call(["mkdir","-p", ws + "/src"]):
+            if call(["/bin/bash","-c","source " + target + "/setup.bash && catkin_make"],cwd=ws):
+              success = callWsCommand(["init", ws + "/src"],CATKIN,ws)
+              if not success:
+                if not call(["rm","-rf",ws]):
+                  print " - Unable to remove stray ws directory at " + ws
+            else:
+              print " - Unable to run the catkin_make wrapper"
+              success = False
+          else:
+            print " - Worskpace directory does not exist, and unable to create it. Cannot continue"
+            success = False
+        else:
+          if call(["mkdir","-p",ws]):
+            success = callWsCommand(["init",ws,target],ROSBUILD,ws)
+            if not success: 
+              if not call(["rm","-rf",ws]):
+                print " - Unable to remove stray ws directory at " + ws
+          else:
+            print " - Worskpace directory does not exist, and unable to create it. Cannot continue"
+            success = False
+  if remove or not success:
+    printBoldText("Removing workspace from " + ws)
+    if not testPath(ws):
+      print " - Workspace does not exist in " + ws
+      return True
+    else:
+      success = call(["rm","-rf",ws])
+  printResult(success)
+  return success
+
+def rosinstallROSPackage(rosinstall_file, type=CATKIN, ws=DEFAULT_CATKIN_WS):
+  printBoldText("Merging " + rosinstall_file + " in " + ws)
+  if type not in [CATKIN, ROSBUILD]:
+    print " - Unknown workspace type: " + type + ". Cannot continue."
+    success = False
+  else:
+    success = callWsCommand(["merge","--confirm-all","--target-workspace="+ws,rosinstall_file],type,ws)
+  printResult(success)
+  return success
+
+def removeROSPackage(package_name, type=CATKIN, ws=DEFAULT_CATKIN_WS):
+  printBoldText("Removing " + package_name + " from " + ws)
+  if type not in [CATKIN, ROSBUILD]:
+    print " - Unknown workspace type: " + type + ". Cannot continue."
+    success = False
+  else:
+    if callWsCommand(["rm",package_name],type,ws=ws):
+      success = call(["rm","-rf",ws+"/"+package_name])
+    else:
+      print " - failed removing " + package_name + " from rosinstall file"
+      success = False
+  printResult(success)
+  return success
+
+def patchPackage(package_name, patch_file, type=CATKIN, ws=DEFAULT_CATKIN_WS):
+  printBoldText("Patching " + package_name + " using " + patch_file)
+  if type == CATKIN:
+    ws = ws + "/src"
+  package_dir = ws + "/" + package_name
+  #resolve web address
+  patch_file = resolveFromWeb(patch_file)
+  #check if patch has already been applied
+  patch_hash = md5ForFile(patch_file)
+  patch_log = package_dir + "/applied_patches"
+  if testPath(patch_log):
+    #patch log is available - let us see if this patch has already been applied
+    patched_lines = [line.rstrip('\n') for line in open(patch_log)]
+    if patch_hash in patched_lines:
+      print " - This patch has already been applied"
+      return True
+  #ok, everything seems set. Lets apply the patch
+  success = call(["patch","--force","-p0","-d",package_dir,"-i",patch_file])
+  if success and not dry_run:
+    f = open(patch_log,"a")
+    f.write(patch_hash + "\n")
+    f.close
+  printResult(success)
+  #remove patch file
+  call(["rm","-rf",patch_file])
+  return success
+
+def updateConfig(config_file_location, config=USER_CONFIG_FILE):
+  printBoldText("Updating " + config + " to " + config_file_location) 
+  #check if config file location is a web address
+  if isWebAddress(config_file_location):
+    local_config = dict()
+    local_config['resolve'] = config_file_location
+    directory = os.path.dirname(os.path.realpath(config))
+    call(["mkdir","-p",directory])
+    f = open(config,"w")
+    yaml.dump(local_config, f)
+    f.close()
+    success = True
+  else:
+    success = call(["cp",config_file_location,config])
+  printResult(success)
+  return success
+
+def resolveConfigWeb(config):
+  if 'resolve' in config.keys():
+    config_file = resolveFromWeb(config['resolve'])
+    f2 = open(config_file)
+    config = yaml.load(f2)
+  return config
+
+def readConfigFile(config_file=USER_CONFIG_FILE):
+  f = open(config_file)
+  config = yaml.load(f)
+  return resolveConfigWeb(config)
+
+def getDefaultUserConfig():
+  system = readConfigFile(SYSTEM_CONFIG_FILE)
+  config = system['default_user']
+  return resolveConfigWeb(config)
+
+def synchronizeSystem():
+  if testPath(SYSTEM_CONFIG_FILE):
+    new_system = readConfigFile(SYSTEM_CONFIG_FILE)
+    new_packages = new_system['apt_packages']['managed'] + new_system['apt_packages']['unmanaged']
+  else:
+    print "Unable to find system configuration file. Have you initialized using --config flag?"
+    return False
+  old_packages = []
+  if testPath(CURRENT_SYSTEM_CONFIG):
+    # current system config exists
+    # calculate differences
+    old_system = readConfigFile(CURRENT_SYSTEM_CONFIG)
+    old_packages = old_system['apt_packages']['managed']
+  packages_to_install = new_packages # provide a flag to do changes only
+  installAptPackages(packages_to_install)
+  packages_to_remove = [package for package in old_packages if package not in new_packages]
+  installAptPackages(packages_to_remove, remove=True)
+
+  #write out the current configuration
+  if not dry_run:
+    f = open(CURRENT_SYSTEM_CONFIG, "w")
+    yaml.dump(new_system, f) #needs to be fancier for error checking
+    f.close()
+
+  return True
+
+def synchronizeUserSpace():
+
+  if testPath(USER_CONFIG_FILE):
+    config = readConfigFile(USER_CONFIG_FILE)
+  else:
+    config = getDefaultUserConfig()
+
+  ws = dict()
+  target = dict()
+  target[CATKIN] = DEFAULT_TARGET 
+  target[ROSBUILD] = DEFAULT_TARGET
+  if config[CATKIN]:
+    ws[CATKIN] = os.path.expanduser("~") + "/" + config['ws'][CATKIN]
+    target[ROSBUILD] = ws[CATKIN] + "/devel"
+  if config[ROSBUILD]:
+    ws[ROSBUILD] = os.path.expanduser("~") + "/" + config['ws'][ROSBUILD]
+  if config['install_gazebo_models']:
+    gazebo_dir = os.path.expanduser("~") + "/" + config['gazebo_dir']
+
+  stable = True
+
+  #initialize workspaces as required
+  for build_type in [CATKIN,ROSBUILD]: #CATKIN needs to be first if both overlays are used
+    if config[build_type]:
+      # Initialization
+      if testPath(ws[build_type]):
+        if build_type == ROSBUILD:
+          success = testPath(ws[build_type] + "/.rosinstall")
+        else:
+          success = testPath(ws[build_type] + "/src/.rosinstall")
+        if success:
+          printBoldText("Found existing workspace at " + ws[build_type] + ". Skipping initialization")
+        else:
+          printError("For " + build_type + " workspace, directory " + ws[build_type] + " exists, but it is not a valid workspace.")
+          stable = False
+      else:
+        success = initializeWorkspace(type=build_type,ws=ws[build_type],target=target[build_type])
+        if not success:
+          stable = False
+
+  if not stable:
+    printError("This is a fatal error")
+    return False
+
+  # compute new workspace packages
+  new_packages = dict()
+  ws_suffix = {CATKIN: '/src', ROSBUILD: ''}
+  for build_type in ['rosbuild','catkin']:
+    new_packages[build_type] = []
+    if config[build_type]:
+      for entry in config['rosinstall'][build_type]:
+        if entry['type'] == 'uri':
+          rosinstall_target = entry['uri']
+          new_packages[build_type].extend(getPackageNamesFromRosinstallFile(rosinstall_target))
+        elif entry['type'] == 'rosinstall':
+          rosinstall_target = "/tmp/rosinstall_target"
+          tmp_file = open(rosinstall_target,"w")
+          yaml.dump(entry['rosinstall'], tmp_file)
+          tmp_file.close()
+          package_names = getPackageNamesFromRosinstallDict(entry['rosinstall']) 
+          new_packages[build_type].extend(package_names)
+        rosinstallROSPackage(rosinstall_target,build_type,ws[build_type])
+      #update workspace
+      if len(new_packages[build_type]) != 0:
+        ws_loc = ws[build_type] + ws_suffix[build_type]
+        printBoldText("Updating " + str(new_packages[build_type]) + " in " + ws[build_type] + ". This may take a while")
+        callWsCommand(["update","--target-workspace="+ws_loc]+new_packages[build_type],type=build_type,ws=ws[build_type],verbose=True)
+
+  # apply patches as required
+  if 'patches' in config.keys():
+    for patch in config['patches']:
+      package_name = patch.keys()[0]
+      type = patch[package_name]['type']
+      patch_uri = patch[package_name]['uri']
+      patchPackage(package_name,patch_uri,type,ws[type])
+
+  # compute differences with old config and remove unneeded packages
+  if testPath(CURRENT_USER_CONFIG):
+    old_config = readConfigFile(CURRENT_USER_CONFIG) 
+    old_packages = dict()
+    for build_type in ['rosbuild','catkin']:
+      old_packages[build_type] = []
+      if old_config[build_type]:
+        for entry in old_config['rosinstall'][build_type]:
+          if entry['type'] == 'uri':
+            old_packages[build_type].extend(getPackageNamesFromRosinstallFile(entry['uri']))
+          elif entry['type'] == 'rosinstall':
+            package_names = getPackageNamesFromRosinstallDict(entry['rosinstall']) 
+            old_packages[build_type].extend(package_names)
+      packages_to_remove = [package for package in old_packages[build_type] if package not in new_packages[build_type]]
+      if len(packages_to_remove != 0):
+        remove_packages = userQuery("The following packages: " + str(packages_to_remove) + " are no longer required. Remove?")
+        if remove_packages:
+          for package in packages_to_remove:
+            removeROSPackage(package, build_type, ws[build_type])
+
+  # copy over current config
+  if not dry_run:
+    f = open(CURRENT_USER_CONFIG, "w")
+    yaml.dump(config, f) #needs to be fancier for error checking
+    f.close()
+
+  return True
+
+if  __name__ =='__main__':
+  parser = argparse.ArgumentParser()
+  parser.add_argument("-s","--sync", action="store_true", help="synchronize user or system (if used with --system) setup")
+  parser.add_argument("-S","--system", action="store_true", help="runs system setup (requires sudo access)")
+  parser.add_argument("-p","--print-command", action="store_true", help="displays bash commands and executes them")
+  parser.add_argument("-d","--dry-run", action="store_true", help="displays bash commands, but does not execute them")
+  parser.add_argument("-c","--config", type=str, help="set config file for user or system (if used with --system). Can take an absolute file path or url.")
+  args = parser.parse_args()
+
+  dry_run = args.dry_run
+  print_command = args.print_command
+
+  if (isSuperUser() and not args.system) or (not isSuperUser() and args.system):
+    print "Illegal usage. You should run the command as either:"
+    print " Update system (requires admin priveleges): sudo bwi-update --system <additional_args>"
+    print " Update user: bwi-update <additional_args>"
+    parser.print_usage()
+    sys.exit(1)
+
+  if args.config:
+    if args.system:
+      sys.exit(updateConfig(args.config,SYSTEM_CONFIG_FILE))
+    else:
+      sys.exit(updateConfig(args.config,USER_CONFIG_FILE))
+
+  if args.sync:
+    if args.system:
+      sys.exit(synchronizeSystem())
+    else:
+      sys.exit(synchronizeUserSpace())
+
+  print "You need to provide either --sync or --config CONFIG to use this tool"
+  sys.exit(1)
