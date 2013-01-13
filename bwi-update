@@ -21,6 +21,7 @@ CURRENT_SYSTEM_CONFIG = "/etc/bwi/bwi-update/current"
 USER_CONFIG_DIR = os.path.expanduser("~") + "/.bwi"
 USER_CONFIG_FILE = USER_CONFIG_DIR + "/config"
 CURRENT_USER_CONFIG = USER_CONFIG_DIR + "/current"
+TMP_DIR = "/tmp/bwi_update"
 
 # some constants defining workspace type
 CATKIN = "catkin"
@@ -146,7 +147,7 @@ def anonymize(file):
 def resolveFromWeb(file):
   if isWebAddress(file):
     file_name = file.split('/')[-1]
-    local_file_path = "/tmp/" + anonymize(file_name)
+    local_file_path = TMP_DIR + "/" + anonymize(file_name)
     success = call(["wget", "--quiet", file, "-O", local_file_path])
     if not success:
       return None
@@ -239,27 +240,30 @@ def updateRosdep():
   printResult(success)
   return success
 
-def installGazeboModels(remove=False,gazebo_dir=DEFAULT_GAZEBO_DIR):
+def installGazeboModels(gazebo_dir=DEFAULT_GAZEBO_DIR,remove=False):
   gazebo_models_dir = gazebo_dir + GAZEBO_MODELS_DIR_SUFFIX
   if not remove:
     printBoldText("Installing gazebo models in " + gazebo_dir)
     if call(["mkdir","-p", gazebo_dir]):
-      if testPath(gazebo_models_dir):
-        print " - Directory is not empty. Cannot continue."
-        success = False
+      #see if repository exists
+      if call(["hg", "-R", gazebo_models_dir, "root"]):
+        print " - Repository exists. Updating"
+        call(["hg","pull"],verbose=True,cwd=gazebo_models_dir)
+        success = True
       else:
-        call(["hg", "clone", GAZEBO_MODELS_REPO, gazebo_models_dir],verbose=True)
-        #create a gazebo environment setup file
-        if call(["mkdir", "-p", USER_CONFIG_DIR]): 
-          file_name = USER_CONFIG_DIR + "/gazebo.bash"
-          f = open(file_name,'w')
-          f.write("export GAZEBO_MODEL_PATH=" + gazebo_models_dir + ":${GAZEBO_MODEL_PATH}")
-          f.close()
-          final_source_list.append("source " + file_name)
-          success = True
-        else:
-          print " - Config directory: " + USER_CONFIG_DIR + " does not exist, and unable to create it. Cannot Continue"
+        if testPath(gazebo_models_dir):
+          print " - Directory is not empty. Cannot continue."
           success = False
+        else:
+          call(["hg", "clone", GAZEBO_MODELS_REPO, gazebo_models_dir],verbose=True)
+          success = True
+      if success:
+        #create a gazebo environment setup file
+        file_name = USER_CONFIG_DIR + "/gazebo.bash"
+        f = open(file_name,'w')
+        f.write("export GAZEBO_MODEL_PATH=" + gazebo_models_dir + ":${GAZEBO_MODEL_PATH}")
+        f.close()
+        final_source_list.append("source " + file_name)
     else:
       print " - " + gazebo_dir + " does not exist, and unable to create it. Cannot Continue"
       success = False
@@ -297,7 +301,7 @@ def initializeWorkspace(remove=False,type=CATKIN,ws=DEFAULT_CATKIN_WS,target=DEF
                 if not call(["rm","-rf",ws]):
                   print " - Unable to remove stray ws directory at " + ws
             else:
-              print " - Unable to run the catkin_make wrapper"
+              print " - Unable to initialize catkin workspace"
               success = False
           else:
             print " - Worskpace directory does not exist, and unable to create it. Cannot continue"
@@ -387,7 +391,10 @@ def updateConfig(config_file_location, config=USER_CONFIG_FILE):
   else:
     success = call(["cp",config_file_location,config])
   printResult(success)
-  return success
+  if (success):
+    return 0
+  else:
+    return 1
 
 def resolveConfigWeb(config):
   if 'resolve' in config.keys():
@@ -402,7 +409,11 @@ def readConfigFile(config_file=USER_CONFIG_FILE):
   return resolveConfigWeb(config)
 
 def getDefaultUserConfig():
-  system = readConfigFile(SYSTEM_CONFIG_FILE)
+  if testPath(SYSTEM_CONFIG_FILE):
+    system = readConfigFile(SYSTEM_CONFIG_FILE)
+  else:
+    printError("Unable to find system configuration file. Please contact your system administrator.")
+    return None
   config = system['default_user']
   return resolveConfigWeb(config)
 
@@ -411,8 +422,8 @@ def synchronizeSystem():
     new_system = readConfigFile(SYSTEM_CONFIG_FILE)
     new_packages = new_system['apt_packages']['managed'] + new_system['apt_packages']['unmanaged']
   else:
-    print "Unable to find system configuration file. Have you initialized using --config flag?"
-    return False
+    printError("Unable to find system configuration file. Have you initialized using --config flag?")
+    return 1
   old_packages = []
   if testPath(CURRENT_SYSTEM_CONFIG):
     # current system config exists
@@ -430,7 +441,7 @@ def synchronizeSystem():
     yaml.dump(new_system, f) #needs to be fancier for error checking
     f.close()
 
-  return True
+  return 0
 
 def synchronizeUserSpace():
 
@@ -439,17 +450,26 @@ def synchronizeUserSpace():
   else:
     config = getDefaultUserConfig()
 
+  if not config:
+    return 1
+
   ws = dict()
   target = dict()
   target[CATKIN] = DEFAULT_TARGET 
   target[ROSBUILD] = DEFAULT_TARGET
-  if config[CATKIN]:
+  source_target = None
+  ros_workspace_target = DEFAULT_TARGET
+  if config[CATKIN]: # CATKIN needs to be first if both overlays are used
     ws[CATKIN] = os.path.expanduser("~") + "/" + config['ws'][CATKIN]
     target[ROSBUILD] = ws[CATKIN] + "/devel"
+    source_target = ws[CATKIN] + "/devel/setup.bash"
   if config[ROSBUILD]:
     ws[ROSBUILD] = os.path.expanduser("~") + "/" + config['ws'][ROSBUILD]
+    source_target = ws[ROSBUILD] + "/devel/setup.bash"
+    ros_workspace_target = ws[ROSBUILD]
   if config['install_gazebo_models']:
     gazebo_dir = os.path.expanduser("~") + "/" + config['gazebo_dir']
+    installGazeboModels(gazebo_dir)
 
   stable = True
 
@@ -487,7 +507,7 @@ def synchronizeUserSpace():
           rosinstall_target = entry['uri']
           new_packages[build_type].extend(getPackageNamesFromRosinstallFile(rosinstall_target))
         elif entry['type'] == 'rosinstall':
-          rosinstall_target = "/tmp/rosinstall_target"
+          rosinstall_target = TMP_DIR + "/rosinstall_target"
           tmp_file = open(rosinstall_target,"w")
           yaml.dump(entry['rosinstall'], tmp_file)
           tmp_file.close()
@@ -522,7 +542,7 @@ def synchronizeUserSpace():
             package_names = getPackageNamesFromRosinstallDict(entry['rosinstall']) 
             old_packages[build_type].extend(package_names)
       packages_to_remove = [package for package in old_packages[build_type] if package not in new_packages[build_type]]
-      if len(packages_to_remove != 0):
+      if len(packages_to_remove) != 0:
         remove_packages = userQuery("The following packages: " + str(packages_to_remove) + " are no longer required. Remove?")
         if remove_packages:
           for package in packages_to_remove:
@@ -534,7 +554,18 @@ def synchronizeUserSpace():
     yaml.dump(config, f) #needs to be fancier for error checking
     f.close()
 
-  return True
+  # setup bash
+  file_name = USER_CONFIG_DIR + "/workspace.bash"
+  f = open(file_name,'w')
+  if source_target:
+    f.write("source " + source_target + "\n")
+  f.write("export ROS_WORKSPACE=" + ros_workspace_target + "\n")
+  f.close()
+  final_source_list.append("source " + file_name)
+
+  printFinalMessage()
+
+  return 0
 
 if  __name__ =='__main__':
   parser = argparse.ArgumentParser()
@@ -549,23 +580,34 @@ if  __name__ =='__main__':
   print_command = args.print_command
 
   if (isSuperUser() and not args.system) or (not isSuperUser() and args.system):
-    print "Illegal usage. You should run the command as either:"
-    print " Update system (requires admin priveleges): sudo bwi-update --system <additional_args>"
-    print " Update user: bwi-update <additional_args>"
-    parser.print_usage()
+    print ""
+    printError("Illegal usage. You should run the command as either:")
+    print " sudo bwi-update --system <additional_args>     (for system updates)"
+    print " bwi-update <additional_args>                   (for user update)"
+    print ""
+    parser.print_help()
     sys.exit(1)
+
+  call(["mkdir", "-p", TMP_DIR])
 
   if args.config:
     if args.system:
       sys.exit(updateConfig(args.config,SYSTEM_CONFIG_FILE))
     else:
+      if not call(["mkdir", "-p", USER_CONFIG_DIR]):
+        printError("Unable to construct local config directory: " + USER_CONFIG_DIR + ". Cannot continue.")
+        sys.exit(1)
       sys.exit(updateConfig(args.config,USER_CONFIG_FILE))
 
   if args.sync:
     if args.system:
       sys.exit(synchronizeSystem())
     else:
+      if not call(["mkdir", "-p", USER_CONFIG_DIR]):
+        printError("Unable to construct local config directory: " + USER_CONFIG_DIR + ". Cannot continue.")
+        sys.exit(1)
       sys.exit(synchronizeUserSpace())
 
-  print "You need to provide either --sync or --config CONFIG to use this tool"
+  printError("\nYou need to provide either --sync or --config CONFIG to use this tool\n")
+  parser.print_help()
   sys.exit(1)
