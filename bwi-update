@@ -589,25 +589,32 @@ if  __name__ =='__main__':
     sys.exit(1)
 
   call(["mkdir", "-p", TMP_DIR])
+  call(["chmod", "a+rwx", TMP_DIR])
 
   if args.config:
     if args.system:
-      sys.exit(updateConfig(args.config,SYSTEM_CONFIG_FILE))
+      error_code = updateConfig(args.config,SYSTEM_CONFIG_FILE)
     else:
       if not call(["mkdir", "-p", USER_CONFIG_DIR]):
         printError("Unable to construct local config directory: " + USER_CONFIG_DIR + ". Cannot continue.")
-        sys.exit(1)
-      sys.exit(updateConfig(args.config,USER_CONFIG_FILE))
+        error_code = 1
+      else:
+        error_code = updateConfig(args.config,USER_CONFIG_FILE)
 
-  if args.sync:
+  elif args.sync:
     if args.system:
-      sys.exit(synchronizeSystem())
+      error_code = synchronizeSystem()
     else:
       if not call(["mkdir", "-p", USER_CONFIG_DIR]):
         printError("Unable to construct local config directory: " + USER_CONFIG_DIR + ". Cannot continue.")
-        sys.exit(1)
-      sys.exit(synchronizeUserSpace())
+        error_code = 1
+      else:
+        error_code = synchronizeUserSpace()
 
-  printError("\nYou need to provide either --sync or --config CONFIG to use this tool\n")
-  parser.print_help()
-  sys.exit(1)
+  else:
+    printError("\nYou need to provide either --sync or --config CONFIG to use this tool\n")
+    parser.print_help()
+    error_code = 1
+
+  call(["rm", "-rf", TMP_DIR])
+  sys.exit(error_code)
