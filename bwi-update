@@ -246,7 +246,7 @@ def installGazeboModels(gazebo_dir=DEFAULT_GAZEBO_DIR,remove=False):
     printBoldText("Installing gazebo models in " + gazebo_dir)
     if call(["mkdir","-p", gazebo_dir]):
       #see if repository exists
-      if call(["hg", "-R", gazebo_models_dir, "root"]):
+      if call(["hg", "-R", gazebo_models_dir, "root"],verbose_error=False):
         print " - Repository exists. Updating"
         call(["hg","pull"],verbose=True,cwd=gazebo_models_dir)
         success = True
