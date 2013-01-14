@@ -1,3 +1,15 @@
+bwi-update (0.2.1) precise; urgency=low
+
+  * Stopped removing configuration files on update. closes issue #3.
+
+ -- Piyush Khandelwal (piyushk) <piyushk@gmail.com>  Mon, 14 Jan 2013 12:30:08 +0530
+
+bwi-update (0.2.0) precise; urgency=low
+
+  * Closes issues #1,#2 
+
+ -- Piyush Khandelwal (piyushk) <piyushk@gmail.com>  Mon, 14 Jan 2013 10:55:44 +0530
+
 bwi-update (0.1) precise; urgency=low
 
   * Initial release.

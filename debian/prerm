@@ -1,4 +1,0 @@
-#!/bin/sh
-
-rm -rf /etc/bwi/bwi-update
-rmdir /etc/bwi

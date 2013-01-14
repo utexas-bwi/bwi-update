@@ -1,0 +1,7 @@
+#!/bin/sh
+
+if test $1 = purge 
+then
+  rm -rf /etc/bwi/bwi-update
+  rmdir /etc/bwi
+fi
