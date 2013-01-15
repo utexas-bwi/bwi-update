@@ -435,6 +435,8 @@ def synchronizeSystem():
   packages_to_remove = [package for package in old_packages if package not in new_packages]
   installAptPackages(packages_to_remove, remove=True)
 
+  initializeRosdep()
+
   #write out the current configuration
   if not dry_run:
     f = open(CURRENT_SYSTEM_CONFIG, "w")
@@ -548,12 +550,6 @@ def synchronizeUserSpace():
           for package in packages_to_remove:
             removeROSPackage(package, build_type, ws[build_type])
 
-  # copy over current config
-  if not dry_run:
-    f = open(CURRENT_USER_CONFIG, "w")
-    yaml.dump(config, f) #needs to be fancier for error checking
-    f.close()
-
   # setup bash
   file_name = USER_CONFIG_DIR + "/workspace.bash"
   f = open(file_name,'w')
@@ -563,7 +559,16 @@ def synchronizeUserSpace():
   f.close()
   final_source_list.append("source " + file_name)
 
+  # update rosdep rules
+  updateRosdep()
+
   printFinalMessage()
+
+  # copy over current config
+  if not dry_run:
+    f = open(CURRENT_USER_CONFIG, "w")
+    yaml.dump(config, f) #needs to be fancier for error checking
+    f.close()
 
   return 0
 
