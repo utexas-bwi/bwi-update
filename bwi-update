@@ -465,7 +465,7 @@ def synchronizeUserSpace():
     source_target = ws[CATKIN] + "/devel/setup.bash"
   if config[ROSBUILD]:
     ws[ROSBUILD] = os.path.expanduser("~") + "/" + config['ws'][ROSBUILD]
-    source_target = ws[ROSBUILD] + "/devel/setup.bash"
+    source_target = ws[ROSBUILD] + "/setup.bash"
     ros_workspace_target = ws[ROSBUILD]
   if config['install_gazebo_models']:
     gazebo_dir = os.path.expanduser("~") + "/" + config['gazebo_dir']
