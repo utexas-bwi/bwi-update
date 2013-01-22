@@ -209,7 +209,7 @@ def installAptPackages(package_list, remove=False):
   all_packages_successful = True
   for package_name in package_list:
     print " - " + text + " " + package_name + "..."
-    success = call(["apt-get", command, "--yes", package_name])
+    success = call(["apt-get", command, "--yes", package_name], verbose=True)
     print "  ",
     printResult(success)
     all_packages_successful = all_packages_successful and success
@@ -418,6 +418,10 @@ def getDefaultUserConfig():
   return resolveConfigWeb(config)
 
 def synchronizeSystem():
+
+  installROSRepository()
+  installROSKey()
+
   if testPath(SYSTEM_CONFIG_FILE):
     new_system = readConfigFile(SYSTEM_CONFIG_FILE)
     new_packages = new_system['apt_packages']['managed'] + new_system['apt_packages']['unmanaged']
