@@ -508,7 +508,7 @@ def synchronizeUserSpace():
       if len(new_packages[ws_name]) != 0:
         ws_loc = base_dir + ws_suffix[build_type]
         printBoldText("Updating " + str(new_packages[ws_name]) + " in " + base_dir + ". This may take a while")
-        success = True #callWsCommand(["update","--target-workspace="+ws_loc]+new_packages[ws_name],type=build_type,ws=base_dir,verbose=True)
+        success = callWsCommand(["update","--target-workspace="+ws_loc]+new_packages[ws_name],type=build_type,ws=base_dir,verbose=True)
         printResult(success)
 
     # apply patches as required
