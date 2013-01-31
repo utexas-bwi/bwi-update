@@ -576,6 +576,19 @@ def synchronizeUserSpace():
 
   printFinalMessage()
 
+  # resolve rosinstall files to their actual content
+  for ws_name, ws in config['ws'].iteritems():
+    # update individual entries as required
+    if 'rosinstall' in ws:
+      entries_to_add = []
+      for entry in ws['rosinstall']:
+        if 'uri' in entry.keys():
+          rosinstall_file = resolveFromWeb(entry['uri'])
+          f = open(rosinstall_file)
+          entries_to_add.extend(yaml.load(f))
+      ws['rosinstall'] = [entry for entry in ws['rosinstall'] if 'uri' not in entry.keys()]
+      ws['rosinstall'].extend(entries_to_add)
+
   # copy over current config
   if not dry_run:
     f = open(CURRENT_USER_CONFIG, "w")
