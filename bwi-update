@@ -407,6 +407,9 @@ def synchronizeSystem():
     old_system = readConfigFile(CURRENT_SYSTEM_CONFIG)
     old_packages = old_system['apt_packages']['managed']
   packages_to_install = new_packages # provide a flag to do changes only
+
+  updateApt()
+
   installAptPackages(packages_to_install)
   packages_to_remove = [package for package in old_packages if package not in new_packages]
   installAptPackages(packages_to_remove, remove=True)
