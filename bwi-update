@@ -8,6 +8,7 @@ import sys
 import argparse
 import string
 import random
+import urllib
 
 # Some web constants that are unlikely to change
 ROS_SOURCES_LOCATION = "/etc/apt/sources.list.d/ros-latest.list"
@@ -21,7 +22,7 @@ CURRENT_SYSTEM_CONFIG = "/etc/bwi/bwi-update/current"
 USER_CONFIG_DIR = os.path.expanduser("~") + "/.bwi"
 USER_CONFIG_FILE = USER_CONFIG_DIR + "/config"
 CURRENT_USER_CONFIG = USER_CONFIG_DIR + "/current"
-TMP_DIR = "/tmp/bwi_update"
+TMP_DIR = "/tmp"
 
 # some constants defining workspace type
 CATKIN = "catkin"
@@ -58,12 +59,11 @@ def printResult(success):
     printError(" - Failed");
 
 def isSuperUser():
-
   return os.getuid() == 0
 
 def md5ForFile(file_name, block_size=2**20):
   # http://stackoverflow.com/questions/1131220/get-md5-hash-of-a-files-without-open-it-in-python
-  f = open(file_name,"rb")
+  f = urllib.urlopen(file_name)
   md5 = hashlib.md5()
   while True:
     data = f.read(block_size)
@@ -140,29 +140,15 @@ def callWsCommand(args, type=CATKIN, ws=DEFAULT_CATKIN_WS,verbose=False,verbose_
     command_package = "python-wstool"
   return call(["/bin/bash","-c","unset ROS_WORKSPACE && " + command + " " + " ".join(args)],cwd=ws,verbose=verbose,verbose_error=verbose_error)
 
-def isWebAddress(file):
-  return file[0:7] == "http://" or file[0:8] == "https://"
-
 def anonymize(file):
   return file + '_' + ''.join(random.choice(string.ascii_uppercase + string.digits) for x in range(20))
-
-def resolveFromWeb(file):
-  if isWebAddress(file):
-    file_name = file.split('/')[-1]
-    local_file_path = TMP_DIR + "/" + anonymize(file_name)
-    success = call(["wget", "--quiet", file, "-O", local_file_path])
-    if not success:
-      return None
-    file = local_file_path
-  return file
 
 def getPackageNamesFromRosinstallDict(rosinstall_dict):
   local_names = [local_entry[local_entry.keys()[0]]['local-name'] for local_entry in rosinstall_dict]
   return local_names
 
 def getPackageNamesFromRosinstallFile(rosinstall_file):
-  rosinstall_file = resolveFromWeb(rosinstall_file)
-  f = open(rosinstall_file, "r")
+  f = urllib.urlopen(rosinstall_file)
   rosinstall_dict = yaml.load(f)
   return getPackageNamesFromRosinstallDict(rosinstall_dict)
 
@@ -303,7 +289,11 @@ def rosinstallROSPackage(rosinstall_file, type=CATKIN, ws=DEFAULT_CATKIN_WS):
     print " - Unknown workspace type: " + type + ". Cannot continue."
     success = False
   else:
-    success = callWsCommand(["merge","--confirm-all","--target-workspace="+ws,rosinstall_file],type,ws)
+    if type == CATKIN:
+      success = callWsCommand(["merge","--confirm-all","--target-workspace="+ws+"/src",rosinstall_file],type,ws)
+    else:
+      success = callWsCommand(["merge","--confirm-all","--target-workspace="+ws,rosinstall_file],type,ws)
+
   printResult(success)
   return success
 
@@ -326,8 +316,7 @@ def patchPackage(package_name, patch_file, type=CATKIN, ws=DEFAULT_CATKIN_WS):
   if type == CATKIN:
     ws = ws + "/src"
   package_dir = ws + "/" + package_name
-  #resolve web address
-  patch_file = resolveFromWeb(patch_file)
+  patch_file, _ = urllib.urlretrieve(patch_file) #make sure we have local copy of file
   #check if patch has already been applied
   patch_hash = md5ForFile(patch_file)
   patch_log = package_dir + "/applied_patches"
@@ -344,41 +333,31 @@ def patchPackage(package_name, patch_file, type=CATKIN, ws=DEFAULT_CATKIN_WS):
     f.write(patch_hash + "\n")
     f.close
   printResult(success)
-  #remove patch file
-  call(["rm","-rf",patch_file])
   return success
 
 def updateConfig(config_file_location, config=USER_CONFIG_FILE):
   printBoldText("Updating " + config + " to " + config_file_location) 
   #check if config file location is a web address
-  if isWebAddress(config_file_location):
-    local_config = dict()
-    local_config['resolve'] = config_file_location
-    directory = os.path.dirname(os.path.realpath(config))
-    call(["mkdir","-p",directory])
-    f = open(config,"w")
-    yaml.dump(local_config, f)
-    f.close()
-    success = True
-  else:
-    success = call(["cp",config_file_location,config])
-  printResult(success)
-  if (success):
-    return 0
-  else:
-    return 1
+  local_config = dict()
+  local_config['resolve'] = config_file_location
+  directory = os.path.dirname(os.path.realpath(config))
+  call(["mkdir","-p",directory])
+  f = open(config,"w")
+  yaml.dump(local_config, f)
+  f.close()
+  return 0
 
-def resolveConfigWeb(config):
+def resolveConfig(config):
   if 'resolve' in config.keys():
-    config_file = resolveFromWeb(config['resolve'])
-    f2 = open(config_file)
+    config_file = config['resolve']
+    f2 = urllib.urlopen(config_file)
     config = yaml.load(f2)
   return config
 
 def readConfigFile(config_file=USER_CONFIG_FILE):
   f = open(config_file)
   config = yaml.load(f)
-  return resolveConfigWeb(config)
+  return resolveConfig(config)
 
 def getDefaultUserConfig():
   if testPath(SYSTEM_CONFIG_FILE):
@@ -387,7 +366,7 @@ def getDefaultUserConfig():
     printError("Unable to find system configuration file. Please contact your system administrator.")
     return None
   config = system['default_user']
-  return resolveConfigWeb(config)
+  return resolveConfig(config)
 
 def synchronizeSystem():
 
@@ -586,8 +565,8 @@ def synchronizeUserSpace():
       entries_to_add = []
       for entry in ws['rosinstall']:
         if 'uri' in entry.keys():
-          rosinstall_file = resolveFromWeb(entry['uri'])
-          f = open(rosinstall_file)
+          rosinstall_file = entry['uri']
+          f = urllib.urlopen(rosinstall_file)
           entries_to_add.extend(yaml.load(f))
       ws['rosinstall'] = [entry for entry in ws['rosinstall'] if 'uri' not in entry.keys()]
       ws['rosinstall'].extend(entries_to_add)
@@ -621,9 +600,6 @@ if  __name__ =='__main__':
     parser.print_help()
     sys.exit(1)
 
-  call(["mkdir", "-p", TMP_DIR])
-  call(["chmod", "a+rwx", TMP_DIR])
-
   if args.config:
     if args.system:
       error_code = updateConfig(args.config,SYSTEM_CONFIG_FILE)
@@ -649,5 +625,4 @@ if  __name__ =='__main__':
     parser.print_help()
     error_code = 1
 
-  call(["rm", "-rf", TMP_DIR])
   sys.exit(error_code)
