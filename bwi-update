@@ -1,5 +1,7 @@
 #!/usr/bin/python
 
+from __future__ import print_function
+
 import subprocess
 import os
 import hashlib
@@ -53,20 +55,21 @@ ros_repo = ROS_REPOSITORY_MAIN
 def anonymize(file):
     """Anonymize a string by adding 20 random alphanumeric characters"""
     random_string = ''.join(
-            random.choice(string.ascii_uppercase + string.digits) for x in range(20))
+            random.choice(string.ascii_uppercase + string.digits) 
+            for x in range(20))
     return file + '_' + random_string
 
 def printError(text):
     """Print error string in red to console"""
-    print "\033[31m" + text + "\033[0m"
+    print("\033[31m" + text + "\033[0m")
 
 def printSuccess(text):
     """Print success string in green to console"""
-    print "\033[33m" + text + "\033[0m"
+    print("\033[33m" + text + "\033[0m")
 
 def printBoldText(text):
     """Encapsulate text in sq brackets and print in bold to console"""
-    print "\033[1m[" + text + "]\033[0m"
+    print("\033[1m[" + text + "]\033[0m")
 
 def printResult(success):
     """Print formatted result to screen"""
@@ -74,6 +77,13 @@ def printResult(success):
         printSuccess(" - Done");
     else:
         printError(" - Failed");
+
+def printFinalMessage():
+    """Prints a list of all the files the user needs to source locally"""
+    print("\nPlease ensure that the following lines have been appended to " + 
+            os.path.expanduser("~") + "/.bashrc:\n")
+    for s in final_source_list:
+        print(s)
 
 def isSuperUser():
     """Check if script has been run as superuser"""
@@ -152,7 +162,7 @@ def call(command, verbose=False, verbose_error=True, cwd=None):
     "cwd" is the directory in which the command is executed
     """
     if print_command or dry_run:
-        print " ".join(command)
+        print(" ".join(command))
     if not dry_run:
         if verbose:
             p = subprocess.Popen(command,cwd=cwd)
@@ -184,15 +194,15 @@ def callWsCommand(args, type=CATKIN, ws=DEFAULT_CATKIN_WS,
     elif type == GENERIC:
         command = "wstool"
     return call(
-      ["/bin/bash", "-c", "unset ROS_WORKSPACE && "+command+" "+" ".join(args)],
-      cwd=ws, verbose=verbose, verbose_error=verbose_error)
+          ["/bin/bash", "-c", 
+              "unset ROS_WORKSPACE && " + command + " " + " ".join(args)],
+          cwd=ws, verbose=verbose, verbose_error=verbose_error)
 
 def getPackageNamesFromRosinstallDict(rosinstall_dict):
     """Given a dict with rosinstall entries, extracts local package names"""
     local_names = [
             local_entry[local_entry.keys()[0]]['local-name'] 
-            for local_entry in rosinstall_dict
-    ]
+            for local_entry in rosinstall_dict]
     return local_names
 
 def getPackageNamesFromRosinstallFile(rosinstall_file):
@@ -201,141 +211,159 @@ def getPackageNamesFromRosinstallFile(rosinstall_file):
     rosinstall_dict = yaml.load(f)
     return getPackageNamesFromRosinstallDict(rosinstall_dict)
 
-# primary functions
+################################################################################
+# PRIMARY FUNCTIONS - These are high level functions that change the system
+################################################################################
 
 def installROSRepository(distro=DEFAULT_UBUNTU_DISTRO, remove=False):
-  if not remove:
-    printBoldText("Updating sources with location of ROS Repository")
-    if testPath(ROS_SOURCES_LOCATION):
-      print " - Existing sources file for repository found. Overwriting."
-    f = open(ROS_SOURCES_LOCATION,'w')
-    f.write("deb http://packages.ros.org/" + ros_repo + "/ubuntu " + distro + " main")
-    f.close()
-    success = True
-    printResult(success)
-    return success
-  else:
-    printBoldText("Removing location of ROS Repository from sources")
-    if not testPath(ROS_SOURCES_LOCATION):
-      print " - Sources file not found."
-      return True
-    success = call(["rm","-rf",ROS_SOURCES_LOCATION])
-    printResult(success)
-    return success
+    """Installs/Removes the ROS repository location from the apt sources list"""
+    if not remove:
+        printBoldText("Updating apt sources to ROS repository: "+ros_repo)
+        if testPath(ROS_SOURCES_LOCATION):
+            print(" - Existing sources file for repository found. Overwriting.")
+        f = open(ROS_SOURCES_LOCATION,'w')
+        f.write("deb http://packages.ros.org/" + ros_repo + "/ubuntu " + 
+                distro + " main")
+        f.close()
+        success = True
+        printResult(success)
+        return success
+    else:
+        printBoldText("Removing location of ROS Repository from sources")
+        if not testPath(ROS_SOURCES_LOCATION):
+            print(" - Sources file not found.")
+            return True
+        success = call(["rm","-rf",ROS_SOURCES_LOCATION])
+        printResult(success)
+        return success
 
 def installROSKey():
-  printBoldText("Installing ROS key")
-  p1 = subprocess.Popen(["wget","http://packages.ros.org/ros.key","--quiet","-O","-"],stdout=subprocess.PIPE,stderr=subprocess.PIPE);
-  returncode = subprocess.call(["apt-key","add","-"],stdin=p1.stdout,stdout=subprocess.PIPE)
-  printResult(returncode == 0)
-  return returncode == 0
+    """Installs the ROS Key to verify signed packages"""
+    printBoldText("Installing ROS key")
+    p1 = subprocess.Popen(
+            ["wget","http://packages.ros.org/ros.key","--quiet","-O","-"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE);
+    returncode = subprocess.call(
+            ["apt-key","add","-"],
+            stdin=p1.stdout, stdout=subprocess.PIPE)
+    printResult(returncode == 0)
+    return returncode == 0
 
 def updateApt():
-  printBoldText("Updating apt-get")
-  success = call(["apt-get", "update"])
-  printResult(success)
-  return success
-
-def installAptPackages(package_list, remove=False):
-  printBoldText("Installing/Removing packages from apt-get")
-  text = "Installing"
-  command = "install"
-  if remove:
-    text = "Removing"
-    command = "remove"
-  all_packages_successful = True
-  for package_name in package_list:
-    print " - " + text + " " + package_name + "..."
-    success = call(["apt-get", command, "--yes", package_name], verbose=True)
-    print "  ",
-    printResult(success)
-    all_packages_successful = all_packages_successful and success
-  return all_packages_successful
-
-def initializeRosdep(remove=False):
-  if not remove:
-    printBoldText("Initializing rosdep")
-    if testPath(ROSDEP_FILE_LOCATION):
-      print " - Default rosdep sources file already exists. Reinitializing."
-      call(["rm","-rf",ROSDEP_FILE_LOCATION])
-    success = call(["rosdep","init"])
+    """Updates apt sources. This call can take some time"""
+    printBoldText("Updating apt-get")
+    success = call(["apt-get", "update"])
     printResult(success)
     return success
-  else:
-    printBoldText("Removing rosdep sources")
-    if not testPath(ROSDEP_FILE_LOCATION):
-      print " - Default rosdep sources file does not exist."
-      return True
+
+def installAptPackages(package_list, remove=False):
+    """Installs/removes a list of system packages through apt"""
+    printBoldText("Installing/Removing packages from apt-get")
+    text = "Installing"
+    command = "install"
+    if remove:
+        text = "Removing"
+        command = "remove"
+    all_packages_successful = True
+    for package_name in package_list:
+        print(" - " + text + " " + package_name + "...")
+        success = call(
+                ["apt-get", command, "--yes", package_name], verbose=True)
+        print("    ",end='')
+        printResult(success)
+        all_packages_successful = all_packages_successful and success
+    return all_packages_successful
+
+def initializeRosdep(remove=False):
+    """Installs/removes the rosdep sources file"""
+    if not remove:
+        printBoldText("Initializing rosdep")
+        if testPath(ROSDEP_FILE_LOCATION):
+            print(" - Default rosdep sources file exists. Reinitializing.")
+            call(["rm", "-rf", ROSDEP_FILE_LOCATION])
+        success = call(["rosdep", "init"])
+        printResult(success)
+        return success
     else:
-      success = call(["rm","-rf",ROSDEP_FILE_LOCATION])
-      printResult(success)
-      return success
+        printBoldText("Removing rosdep sources")
+        if not testPath(ROSDEP_FILE_LOCATION):
+            print(" - Default rosdep sources file does not exist.")
+            return True
+        else:
+            success = call(["rm", "-rf", ROSDEP_FILE_LOCATION])
+            printResult(success)
+            return success
 
 def updateRosdep():
-  printBoldText("Updating rosdep rules")
-  success = call(["rosdep","update"],verbose=True)
-  printResult(success)
-  return success
+    """Updates rosdep rules locally from the global rosdep sources file"""
+    printBoldText("Updating rosdep rules")
+    success = call(["rosdep", "update"], verbose=True)
+    printResult(success)
+    return success
 
-def printFinalMessage():
-  print "\nPlease ensure that the following lines have been appended to " + os.path.expanduser("~") + "/.bashrc:\n"
-  for s in final_source_list:
-    print s
+def initializeWorkspace(remove=False, type=CATKIN, ws=DEFAULT_CATKIN_WS,
+        target=DEFAULT_TARGET):
+    """Initializes/Removes a workspace at a given location
 
-def initializeWorkspace(remove=False,type=CATKIN,ws=DEFAULT_CATKIN_WS,target=DEFAULT_TARGET):
-  if not remove:
-    printBoldText("Initializing workspace of type: " + type + " in " + ws)
-    if type not in [CATKIN, ROSBUILD, GENERIC]:
-      print " - Unknown workspace type: " + type + ". Cannot continue."
-      success = False
-    else:
-      if testPath(ws):
-        print " - Workspace directory is not empty. Cannot continue."
-        success = False
-      else:
-        if type == CATKIN:
-          if call(["mkdir","-p", ws + "/src"]):
-            if call(["/bin/bash","-c","source " + target + "/setup.bash && catkin_make"],cwd=ws):
-              success = callWsCommand(["init", ws + "/src"],type,ws)
-              if not success:
-                if not call(["rm","-rf",ws]):
-                  print " - Unable to remove stray ws directory at " + ws
+    "ws" specifies the base workspace location
+    "target" specifies the target workspace on which this workspace is chained
+    """
+
+    if not remove:
+        printBoldText("Initializing workspace of type: " + type + " in " + ws)
+        if type not in [CATKIN, ROSBUILD, GENERIC]:
+            print(" - Unknown workspace type: " + type + ". Cannot continue.")
+            success = False
+        else:
+            if testPath(ws):
+                print(" - Workspace directory is not empty. Cannot continue.")
+                success = False
             else:
-              print " - Unable to initialize catkin workspace"
-              success = False
-          else:
-            print " - Worskpace directory does not exist, and unable to create it. Cannot continue"
-            success = False
-        elif type == ROSBUILD:
-          if call(["mkdir","-p",ws]):
-            success = callWsCommand(["init",ws,target],type,ws)
-            if not success: 
-              if not call(["rm","-rf",ws]):
-                print " - Unable to remove stray ws directory at " + ws
-          else:
-            print " - Worskpace directory does not exist, and unable to create it. Cannot continue"
-            success = False
-        else: 
-          if call(["mkdir","-p", ws]):
-            success = callWsCommand(["init", ws],type,ws)
-            if not success:
-              if not call(["rm","-rf",ws]):
-                print " - Unable to remove stray ws directory at " + ws
-           
-  if remove or not success:
-    printBoldText("Removing workspace from " + ws)
-    if not testPath(ws):
-      print " - Workspace does not exist in " + ws
-      return True
-    else:
-      success = call(["rm","-rf",ws])
-  printResult(success)
-  return success
+                if type == CATKIN:
+                    if call(["mkdir", "-p", ws + "/src"]):
+                        if call(["/bin/bash", "-c", "source " + target + 
+                                    "/setup.bash && catkin_make"],
+                                cwd=ws):
+                            success = callWsCommand(["init", ws + "/src"],type,ws)
+                            if not success:
+                                if not call(["rm","-rf",ws]):
+                                    print(" - Unable to remove stray ws directory at " + ws)
+                        else:
+                            print(" - Unable to initialize catkin workspace")
+                            success = False
+                    else:
+                        print(" - Worskpace directory does not exist, and unable to create it. Cannot continue")
+                        success = False
+                elif type == ROSBUILD:
+                    if call(["mkdir","-p",ws]):
+                        success = callWsCommand(["init",ws,target],type,ws)
+                        if not success: 
+                            if not call(["rm","-rf",ws]):
+                                print(" - Unable to remove stray ws directory at " + ws)
+                    else:
+                        print(" - Worskpace directory does not exist, and unable to create it. Cannot continue")
+                        success = False
+                else: 
+                    if call(["mkdir","-p", ws]):
+                        success = callWsCommand(["init", ws],type,ws)
+                        if not success:
+                            if not call(["rm","-rf",ws]):
+                                print(" - Unable to remove stray ws directory at " + ws)
+                     
+    if remove or not success:
+        printBoldText("Removing workspace from " + ws)
+        if not testPath(ws):
+            print(" - Workspace does not exist in " + ws)
+            return True
+        else:
+            success = call(["rm","-rf",ws])
+    printResult(success)
+    return success
 
 def rosinstallROSPackage(rosinstall_file, type=CATKIN, ws=DEFAULT_CATKIN_WS):
   printBoldText("Merging " + rosinstall_file + " in " + ws)
   if type not in [CATKIN, ROSBUILD, GENERIC]:
-    print " - Unknown workspace type: " + type + ". Cannot continue."
+    print(" - Unknown workspace type: " + type + ". Cannot continue.")
     success = False
   else:
     if type == CATKIN:
@@ -349,13 +377,13 @@ def rosinstallROSPackage(rosinstall_file, type=CATKIN, ws=DEFAULT_CATKIN_WS):
 def removeROSPackage(package_name, type=CATKIN, ws=DEFAULT_CATKIN_WS):
   printBoldText("Removing " + package_name + " from " + ws)
   if type not in [CATKIN, ROSBUILD, GENERIC]:
-    print " - Unknown workspace type: " + type + ". Cannot continue."
+    print(" - Unknown workspace type: " + type + ". Cannot continue.")
     success = False
   else:
     if callWsCommand(["rm",package_name],type,ws=ws):
       success = call(["rm","-rf",ws+"/"+package_name])
     else:
-      print " - failed removing " + package_name + " from rosinstall file"
+      print(" - failed removing " + package_name + " from rosinstall file")
       success = False
   printResult(success)
   return success
@@ -373,7 +401,7 @@ def patchPackage(package_name, patch_file, type=CATKIN, ws=DEFAULT_CATKIN_WS):
     #patch log is available - let us see if this patch has already been applied
     patched_lines = [line.rstrip('\n') for line in open(patch_log)]
     if patch_hash in patched_lines:
-      print " - This patch has already been applied"
+      print(" - This patch has already been applied")
       return True
   #ok, everything seems set. Lets apply the patch
   success = call(["patch","--force","-p0","-d",package_dir,"-i",patch_file])
@@ -653,11 +681,11 @@ if  __name__ =='__main__':
     distro = args.distro
 
   if (isSuperUser() and not args.system) or (not isSuperUser() and args.system):
-    print ""
+    print("")
     printError("Illegal usage. You should run the command as either:")
-    print " sudo bwi-update --system <additional_args>     (for system updates)"
-    print " bwi-update <additional_args>                   (for user update)"
-    print ""
+    print(" sudo bwi-update --system <additional_args>     (for system updates)")
+    print(" bwi-update <additional_args>                   (for user update)")
+    print("")
     parser.print_help()
     sys.exit(1)
 
