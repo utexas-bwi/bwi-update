@@ -13,8 +13,6 @@ import urllib
 # Some web constants that are unlikely to change
 ROS_SOURCES_LOCATION = "/etc/apt/sources.list.d/ros-latest.list"
 ROSDEP_FILE_LOCATION = "/etc/ros/rosdep/sources.list.d/20-default.list"
-GAZEBO_MODELS_REPO = "https://bitbucket.org/osrf/gazebo_models"
-GAZEBO_MODELS_DIR_SUFFIX = "/gazebo_models"
 
 # Config locations
 SYSTEM_CONFIG_FILE = "/etc/bwi/bwi-update/config"
@@ -36,10 +34,14 @@ DEFAULT_TARGET = "/opt/ros/" + DEFAULT_ROS_DISTRO
 DEFAULT_BASE_DIR = os.path.expanduser("~") + "/ros"
 DEFAULT_CATKIN_WS = DEFAULT_BASE_DIR + "/catkin_ws"
 
+ROS_REPOSITORY_MAIN = "ros"
+ROS_REPOSITORY_SHADOW_FIXED = "ros-shadow-fixed"
+
 # should be converted to class variables when this script is improved
 final_source_list = list()
 print_command = False
 dry_run = False
+ros_repo = ROS_REPOSITORY_MAIN
 
 #helper functions
 
@@ -61,9 +63,16 @@ def printResult(success):
 def isSuperUser():
   return os.getuid() == 0
 
+def open_resource(resource_name):
+    return urllib.urlopen(resource_name)
+
+def get_resource_locally(resource_name):
+    local_resource_name, _ = urllib.urlretrieve(resource_name)
+    return local_resource_name
+
 def md5ForFile(file_name, block_size=2**20):
   # http://stackoverflow.com/questions/1131220/get-md5-hash-of-a-files-without-open-it-in-python
-  f = urllib.urlopen(file_name)
+  f = open_resource(file_name)
   md5 = hashlib.md5()
   while True:
     data = f.read(block_size)
@@ -148,7 +157,7 @@ def getPackageNamesFromRosinstallDict(rosinstall_dict):
   return local_names
 
 def getPackageNamesFromRosinstallFile(rosinstall_file):
-  f = urllib.urlopen(rosinstall_file)
+  f = open_resource(rosinstall_file)
   rosinstall_dict = yaml.load(f)
   return getPackageNamesFromRosinstallDict(rosinstall_dict)
 
@@ -160,7 +169,7 @@ def installROSRepository(distro=DEFAULT_UBUNTU_DISTRO, remove=False):
     if testPath(ROS_SOURCES_LOCATION):
       print " - Existing sources file for repository found. Overwriting."
     f = open(ROS_SOURCES_LOCATION,'w')
-    f.write("deb http://packages.ros.org/ros/ubuntu " + distro + " main")
+    f.write("deb http://packages.ros.org/" + ros_repo + "/ubuntu " + distro + " main")
     f.close()
     success = True
     printResult(success)
@@ -316,7 +325,7 @@ def patchPackage(package_name, patch_file, type=CATKIN, ws=DEFAULT_CATKIN_WS):
   if type == CATKIN:
     ws = ws + "/src"
   package_dir = ws + "/" + package_name
-  patch_file, _ = urllib.urlretrieve(patch_file) #make sure we have local copy of file
+  patch_file = get_resource_locally(patch_file) #make sure we have local copy of file
   #check if patch has already been applied
   patch_hash = md5ForFile(patch_file)
   patch_log = package_dir + "/applied_patches"
@@ -350,7 +359,7 @@ def updateConfig(config_file_location, config=USER_CONFIG_FILE):
 def resolveConfig(config):
   if 'resolve' in config.keys():
     config_file = config['resolve']
-    f2 = urllib.urlopen(config_file)
+    f2 = open_resource(config_file)
     config = yaml.load(f2)
   return config
 
@@ -566,7 +575,7 @@ def synchronizeUserSpace():
       for entry in ws['rosinstall']:
         if 'uri' in entry.keys():
           rosinstall_file = entry['uri']
-          f = urllib.urlopen(rosinstall_file)
+          f = open_resource(rosinstall_file)
           entries_to_add.extend(yaml.load(f))
       ws['rosinstall'] = [entry for entry in ws['rosinstall'] if 'uri' not in entry.keys()]
       ws['rosinstall'].extend(entries_to_add)
@@ -585,11 +594,15 @@ if  __name__ =='__main__':
   parser.add_argument("-S","--system", action="store_true", help="runs system setup (requires sudo access)")
   parser.add_argument("-p","--print-command", action="store_true", help="displays bash commands and executes them")
   parser.add_argument("-d","--dry-run", action="store_true", help="displays bash commands, but does not execute them")
+  parser.add_argument("-r","--repo-main", action="store_true", help="use main ros repository. If provided without sync, updates apt sources.")
+  parser.add_argument("-f","--repo-shadow-fixed", action="store_true", help="use shadow-fixed ros repository. If provided without sync, updates apt sources.")
   parser.add_argument("-c","--config", type=str, help="set config file for user or system (if used with --system). Can take an absolute file path or url.")
   args = parser.parse_args()
 
   dry_run = args.dry_run
   print_command = args.print_command
+  if args.repo_shadow_fixed:
+    ros_repo = ROS_REPOSITORY_SHADOW_FIXED
 
   if (isSuperUser() and not args.system) or (not isSuperUser() and args.system):
     print ""
@@ -620,8 +633,13 @@ if  __name__ =='__main__':
       else:
         error_code = synchronizeUserSpace()
 
-  else:
-    printError("\nYou need to provide either --sync or --config CONFIG to use this tool\n")
+  elif args.system and (args.repo_main or args.repo_shadow_fixed):
+    if installROSRepository() and updateApt():
+      error_code = 0
+    else:
+      error_code = 1
+  else: 
+    printError("\nYou need to provide either --sync, --config or --repo-* to use this tool.\n")
     parser.print_help()
     error_code = 1
 
