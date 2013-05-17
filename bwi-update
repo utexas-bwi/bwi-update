@@ -594,6 +594,7 @@ if  __name__ =='__main__':
   parser.add_argument("-S","--system", action="store_true", help="runs system setup (requires sudo access)")
   parser.add_argument("-p","--print-command", action="store_true", help="displays bash commands and executes them")
   parser.add_argument("-d","--dry-run", action="store_true", help="displays bash commands, but does not execute them")
+  parser.add_argument("-D","--distro", action="store", help="ROS distro (defaults to groovy)")
   parser.add_argument("-r","--repo-main", action="store_true", help="use main ros repository. If provided without sync, updates apt sources.")
   parser.add_argument("-f","--repo-shadow-fixed", action="store_true", help="use shadow-fixed ros repository. If provided without sync, updates apt sources.")
   parser.add_argument("-c","--config", type=str, help="set config file for user or system (if used with --system). Can take an absolute file path or url.")
@@ -603,6 +604,13 @@ if  __name__ =='__main__':
   print_command = args.print_command
   if args.repo_shadow_fixed:
     ros_repo = ROS_REPOSITORY_SHADOW_FIXED
+
+  supported_distros = ['groovy','hydro','indigo']
+  if args.distro:
+    if args.distro not in supported_distros:
+      printError("Unsupported distro " + args.distro + ". Supported distros are " + str(supported_distros)) 
+      sys.exit(1)
+    distro = args.distro
 
   if (isSuperUser() and not args.system) or (not isSuperUser() and args.system):
     print ""
