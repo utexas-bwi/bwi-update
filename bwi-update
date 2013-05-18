@@ -506,7 +506,14 @@ def synchronizeSystem():
             for package in old_packages 
             if package not in new_packages
             ]
-    installAptPackages(packages_to_remove, remove=True)
+    packages_to_remove_user = []
+    for package in packages_to_remove:
+        remove_package = userQuery("Package \"" + package + 
+                "\" is no longer required on the system. Remove? ")
+        if remove_package:
+            packages_to_remove_user.append(package)
+    if len(packages_to_remove_user) != 0:
+        installAptPackages(packages_to_remove_user, remove=True)
 
     # Write out the current configuration to perform checks next time around
     if not dry_run:
