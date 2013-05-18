@@ -464,14 +464,28 @@ def readConfigFile(config_file=USER_CONFIG_FILE):
     config = yaml.load(f)
     return resolveConfig(config)
 
-def getDefaultUserConfig():
-    """Retrieve default user configuration from system setup file"""
+def printConfigURL(config=USER_CONFIG_FILE):
+    """Prints the true location of the config URL"""
+    config_yaml = yaml.load(openResource(config))
+    if 'resolve' in config_yaml.keys():
+        config = config_yaml['resolve']
+    printSuccess("Configuration: " + config)
+    success = True
+    return success
+
+def getUnresolvedDefaultUserConfig():
+    """Retrieve default user configuration location from system setup file"""
     if testPath(SYSTEM_CONFIG_FILE):
         system = readConfigFile(SYSTEM_CONFIG_FILE)
     else:
         printError("Unable to find system configuration file.")
         return None
     config = system['default_user']
+    return config
+
+def getDefaultUserConfig():
+    """Retrieve default user configuration from system setup file"""
+    config = getUnresolvedDefaultUserConfig()
     return resolveConfig(config)
 
 def synchronizeSystem():
@@ -758,6 +772,8 @@ if    __name__ =='__main__':
             help="Use shadow-fixed repo. Without sync, update apt sources.")
     parser.add_argument("-c", "--config", type=str, 
             help="Set config file for user/system to given URL/abs filepath.")
+    parser.add_argument("-P", "--print-config", action="store_true", 
+            help="Print the user/system config file URL")
     args = parser.parse_args()
 
     dry_run = args.dry_run
@@ -774,7 +790,7 @@ if    __name__ =='__main__':
         distro = args.distro
 
     if ((isSuperUser() and not args.system) or 
-            (not isSuperUser() and args.system)):
+            (not isSuperUser() and (args.system and not args.print_config))):
         print("")
         printError("Illegal usage. You should run the command as either:")
         print(" sudo bwi-update --system <additional_args> (system updates)")
@@ -783,40 +799,49 @@ if    __name__ =='__main__':
         parser.print_help()
         sys.exit(1)
 
+    success = False
     if args.config:
         if args.system:
-            error_code = (
-                    0 if updateConfig(args.config, SYSTEM_CONFIG_FILE) 
-                    else 1
-                    )
+            success = updateConfig(args.config, SYSTEM_CONFIG_FILE) 
         else:
             if not call(["mkdir", "-p", USER_CONFIG_DIR]):
                 printError("Unable to construct local config directory: " + 
                            USER_CONFIG_DIR + ". Cannot continue.")
-                error_code = 1
+                success = False
             else:
-                error_code = (
-                        0 if updateConfig(args.config, USER_CONFIG_FILE) 
-                        else 1
-                        )
+                success = updateConfig(args.config, USER_CONFIG_FILE)
 
     elif args.sync:
         if args.system:
-            error_code = 0 if synchronizeSystem() else 1
+            success = synchronizeSystem()
         else:
             if not call(["mkdir", "-p", USER_CONFIG_DIR]):
                 printError("Unable to construct local config directory: " + 
                            USER_CONFIG_DIR + ". Cannot continue.")
-                error_code = 1
+                success = False
             else:
-                error_code = 0 if synchronizeUserSpace() else 1
+                success = synchronizeUserSpace()
+    elif args.print_config:
+        if args.system:
+            success = printConfigURL(SYSTEM_CONFIG_FILE)
+        else:
+            if testPath(USER_CONFIG_FILE):
+                success = printConfigURL(USER_CONFIG_FILE)
+            else:
+                default_config = getUnresolvedDefaultUserConfig()
+                if 'resolve' in default_config.keys():
+                    success = printConfigURL(default_config['resolve'])
+                else:
+                    print("The user config is contained in system file")
+                    success = printConfigURL(SYSTEM_CONFIG_FILE)
 
     elif args.system and (args.repo_main or args.repo_shadow_fixed):
-        error_code = 0 if installROSRepository() and updateApt() else 1
+        success = installROSRepository()
     else: 
-        printError("\nYou need to provide either --sync, --config or " + 
-                   "--repo-* to use this tool.\n")
+        printError("\nYou need to provide either --sync, --config, --repo-*, " + 
+                   "or --print-config to use this tool.\n")
         parser.print_help()
-        error_code = 1
+        success = False
 
+    error_code = 0 if success else 1
     sys.exit(error_code)
