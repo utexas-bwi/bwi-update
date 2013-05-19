@@ -11,6 +11,15 @@ import argparse
 import string
 import random
 import urllib
+import re
+
+################################################################################
+# HELPER
+################################################################################
+
+def getUniqueIdentifierForPath(path):
+    """Returns a unique identifier for the path"""
+    return hashlib.md5(path).hexdigest()
 
 ################################################################################
 # Constants
@@ -22,12 +31,9 @@ ROSDEP_FILE_LOCATION = "/etc/ros/rosdep/sources.list.d/20-default.list"
 ROS_REPOSITORY_MAIN = "ros"
 ROS_REPOSITORY_SHADOW_FIXED = "ros-shadow-fixed"
 
-# bwi-update tool configuration files locations + temporary directories
+# bwi-update tool system configuration files locations
 SYSTEM_CONFIG_FILE = "/etc/bwi/bwi-update/config"
 CURRENT_SYSTEM_CONFIG = "/etc/bwi/bwi-update/current"
-USER_CONFIG_DIR = os.path.expanduser("~") + "/.bwi"
-USER_CONFIG_FILE = USER_CONFIG_DIR + "/config"
-CURRENT_USER_CONFIG = USER_CONFIG_DIR + "/current"
 TMP_DIR = "/tmp"
 
 # Different workspace types
@@ -39,14 +45,23 @@ GENERIC = "generic"
 DEFAULT_UBUNTU_DISTRO = "precise"
 DEFAULT_ROS_DISTRO = "groovy"
 DEFAULT_TARGET = "/opt/ros/" + DEFAULT_ROS_DISTRO
-DEFAULT_BASE_DIR = os.path.expanduser("~") + "/ros"
+DEFAULT_BASE_SUFFIX = "ros"
+DEFAULT_BASE_DIR = os.path.expanduser("~") + "/" + DEFAULT_BASE_SUFFIX
 DEFAULT_CATKIN_WS = DEFAULT_BASE_DIR + "/catkin_ws"
+DEFAULT_CONFIG_DIR = (os.path.expanduser("~") + "/.bwi/" + 
+                      getUniqueIdentifierForPath(DEFAULT_BASE_DIR))
 
 # should be converted to class variables when this script is improved
 final_source_list = list()
 print_command = False
 dry_run = False
 ros_repo = ROS_REPOSITORY_MAIN
+user_base_dir = DEFAULT_BASE_DIR
+default_target = DEFAULT_TARGET
+distro = DEFAULT_ROS_DISTRO
+user_config_dir = DEFAULT_CONFIG_DIR
+user_config_file = user_config_dir + "/config"
+current_user_config = user_config_dir + "/current"
 
 ################################################################################
 # Helper Functions
@@ -117,6 +132,26 @@ get-md5-hash-of-a-files-without-open-it-in-python
         md5.update(data)
     f.close()
     return md5.hexdigest()
+
+def configure_string(template, environment):
+    '''
+    Substitute variables enclosed by @ characters.
+
+    :param template: the template, ``str``
+    :param environment: dictionary of placeholders to substitute,
+      ``dict``
+    :returns: string with evaluates template
+    :raises: KeyError for placeholders in the template which are not
+      in the environment
+
+    https://github.com/ros-infrastructure/catkin_pkg/blob/\
+master/src/catkin_pkg/cmake.py
+
+    '''
+    def substitute(match):
+        var = match.group(0)[1:-1]
+        return environment[var]
+    return re.sub('\@[a-zA-Z0-9_]+\@', substitute, template)
 
 def userQuery(question, default="no"):
     """Ask a yes/no question via raw_input() and return their answer.
@@ -219,7 +254,7 @@ def getPackageNamesFromRosinstallFile(rosinstall_file):
 # PRIMARY FUNCTIONS - These are high level functions that change the system
 ################################################################################
 
-def installROSRepository(distro=DEFAULT_UBUNTU_DISTRO, remove=False):
+def installROSRepository(ubuntu_distro=DEFAULT_UBUNTU_DISTRO, remove=False):
     """Installs/Removes the ROS repository location from the apt sources list"""
     if not remove:
         printBoldText("Updating apt sources to ROS repository: "+ros_repo)
@@ -227,7 +262,7 @@ def installROSRepository(distro=DEFAULT_UBUNTU_DISTRO, remove=False):
             print(" - Existing sources file for repository found. Overwriting.")
         f = open(ROS_SOURCES_LOCATION,'w')
         f.write("deb http://packages.ros.org/" + ros_repo + "/ubuntu " + 
-                distro + " main")
+                ubuntu_distro + " main")
         f.close()
         success = True
         printResult(success)
@@ -237,7 +272,7 @@ def installROSRepository(distro=DEFAULT_UBUNTU_DISTRO, remove=False):
         if not testPath(ROS_SOURCES_LOCATION):
             print(" - Sources file not found.")
             return True
-        success = call(["rm","-rf",ROS_SOURCES_LOCATION])
+        success = call(["rm", "-rf", ROS_SOURCES_LOCATION])
         printResult(success)
         return success
 
@@ -438,7 +473,7 @@ def patchPackage(package_name, patch_file, type=CATKIN, ws=DEFAULT_CATKIN_WS):
     printResult(success)
     return success
 
-def updateConfig(config_file_location, config=USER_CONFIG_FILE):
+def updateConfig(config_file_location, config=user_config_file):
     """Given a config URL, update the copy on system to resolve to it"""
     printBoldText("Updating " + config + " to " + config_file_location) 
     local_config = dict()
@@ -458,13 +493,13 @@ def resolveConfig(config):
         config = yaml.load(f2)
     return config
 
-def readConfigFile(config_file=USER_CONFIG_FILE):
+def readConfigFile(config_file=user_config_file):
     """Read a config file from a given location (and resolve if needed)"""
     f = openResource(config_file)
     config = yaml.load(f)
     return resolveConfig(config)
 
-def printConfigURL(config=USER_CONFIG_FILE):
+def printConfigURL(config=user_config_file):
     """Prints the true location of the config URL"""
     config_yaml = yaml.load(openResource(config))
     if 'resolve' in config_yaml.keys():
@@ -543,31 +578,36 @@ def synchronizeUserSpace():
     """Synchronize user space to given user configuration"""
 
     # Read configuration from user provided location (or default)
-    if testPath(USER_CONFIG_FILE):
-        config = readConfigFile(USER_CONFIG_FILE)
+    if testPath(user_config_file):
+        config = readConfigFile(user_config_file)
     else:
         config = getDefaultUserConfig()
     if not config:
         return False
 
+    configure_variables = {
+        'ROS_DISTRO': distro,
+        'BASE_DIR': user_base_dir
+    }
+
     # Compute chained directory locations for each ws and the next target ws
     rosbuild_setup_target = None
-    source_target = DEFAULT_TARGET
+    source_target = default_target
     ros_workspace_target = None
     for ws_name, ws in config['ws'].iteritems():
         if ws['type'] == CATKIN:
-            base_dir = os.path.expanduser("~") + "/" + ws['dir']
-            rosbuild_setup_target = base_dir + "/devel"
-            source_target = base_dir + "/devel/setup.bash"
-            ros_workspace_target = base_dir + "/src" 
+            ws_base_dir = user_base_dir + "/" + ws['dir']
+            rosbuild_setup_target = ws_base_dir + "/devel"
+            source_target = ws_base_dir + "/devel/setup.bash"
+            ros_workspace_target = ws_base_dir + "/src" 
             break
 
     # If rosbuild also exists, the source target needs to switch 
     for ws_name, ws in config['ws'].iteritems():
         if ws['type'] == ROSBUILD:
-            base_dir = os.path.expanduser("~") + "/" + ws['dir']
-            source_target = base_dir + "/setup.bash" 
-            ros_workspace_target = base_dir 
+            ws_base_dir = user_base_dir + "/" + ws['dir']
+            source_target = ws_base_dir + "/setup.bash" 
+            ros_workspace_target = ws_base_dir 
             break
 
     stable = True
@@ -576,23 +616,23 @@ def synchronizeUserSpace():
     for build_type in [CATKIN, ROSBUILD, GENERIC]:
         for ws_name, ws in config['ws'].iteritems():
             if ws['type'] == build_type:
-                base_dir = os.path.expanduser("~") + "/" + ws['dir']
-                if testPath(base_dir):
-                    if checkWorkspaceExists(build_type, base_dir):
+                ws_base_dir = user_base_dir + "/" + ws['dir']
+                if testPath(ws_base_dir):
+                    if checkWorkspaceExists(build_type, ws_base_dir):
                         printBoldText("Found existing " + build_type + 
-                                      " workspace at " + base_dir + 
+                                      " workspace at " + ws_base_dir + 
                                       ". Skipping initialization")
                     else:
                         printError("For " + build_type + 
-                                   " workspace, directory " + base_dir + 
+                                   " workspace, directory " + ws_base_dir + 
                                    " exists, but it is not a valid workspace.")
                         stable = False
                 else:
-                    target = DEFAULT_TARGET
+                    target = default_target
                     if build_type == ROSBUILD and rosbuild_setup_target:
                         target = rosbuild_setup_target
                     success = initializeWorkspace(
-                            type=build_type, ws=base_dir, target=target
+                            type=build_type, ws=ws_base_dir, target=target
                             )
                     stable = success
                 break
@@ -606,7 +646,7 @@ def synchronizeUserSpace():
     ws_suffix = {CATKIN: '/src', ROSBUILD: '', GENERIC: ''}
     for ws_name, ws in config['ws'].iteritems():
         build_type = ws['type']
-        base_dir = os.path.expanduser("~") + "/" + ws['dir']
+        ws_base_dir = user_base_dir + "/" + ws['dir']
         new_packages[ws_name] = []
         
         if 'rosinstall' in ws:
@@ -625,16 +665,16 @@ def synchronizeUserSpace():
                     tmp_file.close()
                     package_names = getPackageNamesFromRosinstallDict([entry]) 
                     new_packages[ws_name].extend(package_names)
-                rosinstallROSPackage(rosinstall_target,build_type,base_dir)
+                rosinstallROSPackage(rosinstall_target, build_type, ws_base_dir)
             # Update workspace
             if len(new_packages[ws_name]) != 0:
-                ws_loc = base_dir + ws_suffix[build_type]
+                ws_loc = ws_base_dir + ws_suffix[build_type]
                 printBoldText("Updating " + str(new_packages[ws_name]) + 
-                        " in " + base_dir + ". This may take a while")
+                        " in " + ws_base_dir + ". This may take a while")
                 success = callWsCommand(
                         ["update", "--target-workspace=" + ws_loc] + 
                             new_packages[ws_name],
-                        type=build_type, ws=base_dir, verbose=True)
+                        type=build_type, ws=ws_base_dir, verbose=True)
                 printResult(success)
 
         # Apply patches as required
@@ -642,26 +682,27 @@ def synchronizeUserSpace():
             for patch in ws['patches']:
                 package_name = patch.keys()[0]
                 patch_uri = patch[package_name]
-                patchPackage(package_name, patch_uri, build_type, base_dir)
+                patchPackage(package_name, patch_uri, build_type, ws_base_dir)
 
         # Export bash as required
         if 'bash' in ws:
             text = ws['bash']
-            file_name = USER_CONFIG_DIR + "/" + ws_name + ".bash"
+            text = configure_string(text, configure_variables)
+            file_name = user_config_dir + "/" + ws_name + ".bash"
             f = open(file_name,'w')
             f.write(text)
             f.close()
             final_source_list.append("source " + file_name)
 
     # Compute differences with old config and remove unneeded packages
-    if testPath(CURRENT_USER_CONFIG):
-        old_config = readConfigFile(CURRENT_USER_CONFIG)
+    if testPath(current_user_config):
+        old_config = readConfigFile(current_user_config)
 
         # Remove redundant packages
         old_packages = dict()
         for ws_name, ws in config['ws'].iteritems():
             build_type = ws['type']
-            base_dir = os.path.expanduser("~") + "/" + ws['dir']
+            ws_base_dir = user_base_dir + "/" + ws['dir']
             old_packages[ws_name] = []
             if ws_name in old_config['ws']:
                 ws = old_config['ws'][ws_name]
@@ -686,10 +727,10 @@ def synchronizeUserSpace():
             for package in packages_to_remove:
                 remove_package = userQuery("Package \"" + package + 
                         "\" is no longer required in (" + build_type + " - " + 
-                        base_dir + "). Remove? "
+                        ws_base_dir + "). Remove? "
                         )
                 if remove_package:
-                    removeROSPackage(package, build_type, base_dir)
+                    removeROSPackage(package, build_type, ws_base_dir)
 
         # Remove redundant workspaces
         workspaces_to_remove = [
@@ -700,21 +741,28 @@ def synchronizeUserSpace():
         for ws_name in workspaces_to_remove:
             ws = old_config['ws'][ws_name]
             build_type = ws['type']
-            base_dir = os.path.expanduser("~") + "/" + ws['dir']
+            ws_base_dir = user_base_dir + "/" + ws['dir']
             remove_workspace = userQuery("Workspace \"" + ws_name + "(" + 
-                    build_type + " - " + base_dir + 
+                    build_type + " - " + ws_base_dir + 
                     ") is no longer required. Remove?")
             if remove_workspace:
-                initializeWorkspace(remove=True, type=build_type, ws=base_dir)
+                initializeWorkspace(remove=True, 
+                                    type=build_type, ws=ws_base_dir)
 
     # Setup the top level file to source
-    file_name = USER_CONFIG_DIR + "/workspace.bash"
+    file_name = (user_config_dir + "/workspace.bash")
     f = open(file_name,'w')
     f.write("source " + source_target + "\n")
     if ros_workspace_target:
         f.write("export ROS_WORKSPACE=" + ros_workspace_target + "\n")
     f.close()
     final_source_list.append("source " + file_name)
+
+    # Setup the directory name
+    file_name = (user_config_dir + "/directory")
+    f = open(file_name,'w')
+    f.write(user_base_dir + "\n")
+    f.close()
 
     # Update rosdep rules
     updateRosdep()
@@ -741,7 +789,7 @@ def synchronizeUserSpace():
 
     # Copy over current config
     if not dry_run:
-        f = open(CURRENT_USER_CONFIG, "w")
+        f = open(current_user_config, "w")
         yaml.dump(config, f)
         f.close()
 
@@ -766,6 +814,8 @@ if    __name__ =='__main__':
             help="Displays bash commands, but does not execute them.")
     parser.add_argument("-D", "--distro", type=str, action="store", 
             help="ROS distro (defaults to groovy)")
+    parser.add_argument("-b", "--base-dir", type=str, action="store", 
+            help="Default user side base directory (defaults to ~/ros)")
     parser.add_argument("-r", "--repo-main", action="store_true", 
             help="Use main ros repo. Without sync, update apt sources.")
     parser.add_argument("-f", "--repo-shadow-fixed", action="store_true", 
@@ -788,6 +838,14 @@ if    __name__ =='__main__':
                        ". Supported distros are " + str(supported_distros)) 
             sys.exit(1)
         distro = args.distro
+    default_target = "/opt/ros/" + distro
+
+    if args.base_dir:
+        user_base_dir = args.base_dir
+        user_config_dir = (os.path.expanduser("~") + "/.bwi/" + 
+                          getUniqueIdentifierForPath(user_base_dir))
+        user_config_file = user_config_dir + "/config"
+        current_user_config = user_config_dir + "/current"
 
     if ((isSuperUser() and not args.system) or 
             (not isSuperUser() and (args.system and not args.print_config))):
@@ -804,20 +862,20 @@ if    __name__ =='__main__':
         if args.system:
             success = updateConfig(args.config, SYSTEM_CONFIG_FILE) 
         else:
-            if not call(["mkdir", "-p", USER_CONFIG_DIR]):
+            if not call(["mkdir", "-p", user_config_dir]):
                 printError("Unable to construct local config directory: " + 
-                           USER_CONFIG_DIR + ". Cannot continue.")
+                           user_config_dir + ". Cannot continue.")
                 success = False
             else:
-                success = updateConfig(args.config, USER_CONFIG_FILE)
+                success = updateConfig(args.config, user_config_file)
 
     elif args.sync:
         if args.system:
             success = synchronizeSystem()
         else:
-            if not call(["mkdir", "-p", USER_CONFIG_DIR]):
+            if not call(["mkdir", "-p", user_config_dir]):
                 printError("Unable to construct local config directory: " + 
-                           USER_CONFIG_DIR + ". Cannot continue.")
+                           user_config_dir + ". Cannot continue.")
                 success = False
             else:
                 success = synchronizeUserSpace()
@@ -825,8 +883,8 @@ if    __name__ =='__main__':
         if args.system:
             success = printConfigURL(SYSTEM_CONFIG_FILE)
         else:
-            if testPath(USER_CONFIG_FILE):
-                success = printConfigURL(USER_CONFIG_FILE)
+            if testPath(user_config_file):
+                success = printConfigURL(user_config_file)
             else:
                 default_config = getUnresolvedDefaultUserConfig()
                 if 'resolve' in default_config.keys():
