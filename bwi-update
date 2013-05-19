@@ -48,11 +48,13 @@ DEFAULT_TARGET = "/opt/ros/" + DEFAULT_ROS_DISTRO
 DEFAULT_BASE_SUFFIX = "ros"
 DEFAULT_BASE_DIR = os.path.expanduser("~") + "/" + DEFAULT_BASE_SUFFIX
 DEFAULT_CATKIN_WS = DEFAULT_BASE_DIR + "/catkin_ws"
-DEFAULT_CONFIG_DIR = (os.path.expanduser("~") + "/.bwi/" + 
+BASE_CONFIG_DIR = os.path.expanduser("~") + "/.bwi"
+DEFAULT_CONFIG_DIR = (BASE_CONFIG_DIR + "/" + 
                       getUniqueIdentifierForPath(DEFAULT_BASE_DIR))
 
 # should be converted to class variables when this script is improved
 final_source_list = list()
+final_symlink_list = dict()
 print_command = False
 dry_run = False
 ros_repo = ROS_REPOSITORY_MAIN
@@ -98,8 +100,8 @@ def printFinalMessage():
     """Prints a list of all the files the user needs to source locally"""
     print("\nPlease ensure that the following lines have been appended to " + 
             os.path.expanduser("~") + "/.bashrc:\n")
-    for s in final_source_list:
-        print(s)
+    for file, link in final_symlink_list.iteritems():
+        print("source " + link)
 
 def isSuperUser():
     """Check if script has been run as superuser"""
@@ -689,10 +691,12 @@ def synchronizeUserSpace():
             text = ws['bash']
             text = configure_string(text, configure_variables)
             file_name = user_config_dir + "/" + ws_name + ".bash"
+            symlink_name = BASE_CONFIG_DIR + "/" + ws_name + ".bash"
             f = open(file_name,'w')
             f.write(text)
             f.close()
-            final_source_list.append("source " + file_name)
+            final_source_list.append(file_name)
+            final_symlink_list[file_name] = symlink_name
 
     # Compute differences with old config and remove unneeded packages
     if testPath(current_user_config):
@@ -751,12 +755,18 @@ def synchronizeUserSpace():
 
     # Setup the top level file to source
     file_name = (user_config_dir + "/workspace.bash")
+    symlink_name = (BASE_CONFIG_DIR + "/workspace.bash")
     f = open(file_name,'w')
     f.write("source " + source_target + "\n")
     if ros_workspace_target:
         f.write("export ROS_WORKSPACE=" + ros_workspace_target + "\n")
     f.close()
-    final_source_list.append("source " + file_name)
+    final_source_list.append(file_name)
+    final_symlink_list[file_name] = symlink_name 
+
+    # Symlink the final sources
+    for file, link in final_symlink_list.iteritems():
+        call(["ln", "-sf", file, link])
 
     # Setup the directory name
     file_name = (user_config_dir + "/directory")
@@ -842,7 +852,7 @@ if    __name__ =='__main__':
 
     if args.base_dir:
         user_base_dir = args.base_dir
-        user_config_dir = (os.path.expanduser("~") + "/.bwi/" + 
+        user_config_dir = (BASE_CONFIG_DIR + "/" + 
                           getUniqueIdentifierForPath(user_base_dir))
         user_config_file = user_config_dir + "/config"
         current_user_config = user_config_dir + "/current"
