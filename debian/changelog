@@ -1,3 +1,9 @@
+bwi-update (0.4.3) precise; urgency=low
+
+  * further enhancement to #23
+
+ -- Piyush Khandelwal (piyushk( <piyushk@gmail.com>  Sun, 19 May 2013 16:04:30 -0500
+
 bwi-update (0.4.2) precise; urgency=low
 
   * closes #23
